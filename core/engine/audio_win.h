@@ -1,6 +1,7 @@
 // Windows audio: WASAPI loopback capture for the headset (desktop audio) and WASAPI render for the
-// headset microphone. The microphone is played to a configurable render device; use VB-Cable (or any
-// virtual audio cable) to expose it to applications as an input device.
+// headset microphone. Windows has no virtual microphone without a driver: the microphone is played into a virtual
+// audio cable (VB-CABLE's "CABLE Input", or OPENDESK_MIC_RENDER_DEVICE), which apps record from as "CABLE Output".
+// Without one it isn't played anywhere (never on the PC's speakers).
 #pragma once
 
 #include "channel.h"
@@ -18,11 +19,14 @@
 namespace od
 {
 bool send_all(int fd, const void * data, size_t size);
+bool virtual_mic_available();     // the virtual cable the headset microphone is played into exists
+std::string virtual_mic_device(); // its name
 
 class desktop_audio_sender
 {
 public:
-	// device is ignored on Windows: the default render endpoint is captured in loopback mode.
+	// the default render endpoint is captured in loopback mode; device "mute-speakers" ("VR headset only") also mutes
+	// it while streaming
 	desktop_audio_sender(stream_channel &, std::string device, const std::atomic<bool> & enabled);
 	~desktop_audio_sender();
 	void set_paused(bool p) { paused = p; }

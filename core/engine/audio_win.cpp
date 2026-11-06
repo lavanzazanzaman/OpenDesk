@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <endpointvolume.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <wrl/client.h>
 #include <ksmedia.h>
@@ -104,7 +105,8 @@ ComPtr<IMMDevice> default_device(IMMDeviceEnumerator * enumerator, EDataFlow flo
 	return {};
 }
 
-ComPtr<IMMDevice> named_device(IMMDeviceEnumerator * enumerator, EDataFlow flow, const std::wstring & wanted)
+// the endpoint whose name contains `wanted`; otherwise the default one, or none when fallback is false
+ComPtr<IMMDevice> named_device(IMMDeviceEnumerator * enumerator, EDataFlow flow, const std::wstring & wanted, bool fallback = true)
 {
 	if (wanted.empty())
 		return default_device(enumerator, flow);
@@ -130,7 +132,7 @@ ComPtr<IMMDevice> named_device(IMMDeviceEnumerator * enumerator, EDataFlow flow,
 		if (name.find(wanted) != std::wstring::npos)
 			return device;
 	}
-	return default_device(enumerator, flow);
+	return fallback ? default_device(enumerator, flow) : ComPtr<IMMDevice>();
 }
 
 std::wstring mic_device_name()
@@ -144,6 +146,26 @@ std::wstring mic_device_name()
 	return wide;
 }
 } // namespace
+
+std::string virtual_mic_device()
+{
+	const char * env = getenv("OPENDESK_MIC_RENDER_DEVICE");
+	return env && *env ? env : "CABLE Input";
+}
+
+bool virtual_mic_available()
+{
+	const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+	bool found = false;
+	{
+		ComPtr<IMMDeviceEnumerator> enumerator;
+		if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))))
+			found = bool(named_device(enumerator.Get(), eRender, mic_device_name(), false));
+	}
+	if (com)
+		CoUninitialize();
+	return found;
+}
 
 desktop_audio_sender::desktop_audio_sender(stream_channel & c, std::string d, const std::atomic<bool> & e) :
         channel(c), device(std::move(d)), enabled(e)
@@ -166,6 +188,11 @@ void desktop_audio_sender::run()
 	ComPtr<IMMDevice> endpoint;
 	ComPtr<IAudioClient> client;
 	ComPtr<IAudioCaptureClient> capture;
+	ComPtr<IAudioClient> keepalive; // a silent stream on the same endpoint: loopback then delivers continuously
+	ComPtr<IAudioRenderClient> keepalive_render;
+	UINT32 keepalive_frames = 0;
+	ComPtr<IAudioEndpointVolume> volume;
+	bool muted_by_us = false;
 	WAVEFORMATEX * mix = nullptr;
 	SwrContext * swr = nullptr;
 	uint8_t * converted = nullptr;
@@ -175,6 +202,10 @@ void desktop_audio_sender::run()
 	auto cleanup = [&] {
 		if (client)
 			client->Stop();
+		if (keepalive)
+			keepalive->Stop();
+		if (muted_by_us && volume)
+			volume->SetMute(FALSE, nullptr); // the PC's speakers as they were
 		swr_free(&swr);
 		av_freep(&converted);
 		if (mix)
@@ -207,9 +238,41 @@ void desktop_audio_sender::run()
 		cleanup();
 		return;
 	}
+	// Windows only hands loopback data over while something plays: a silent stream keeps it running, so the headset
+	// gets a continuous stream (silence included) as from PulseAudio/PipeWire on Linux
+	if (SUCCEEDED(endpoint->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(keepalive.GetAddressOf()))) &&
+	    SUCCEEDED(keepalive->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 200000, 0, mix, nullptr)) &&
+	    SUCCEEDED(keepalive->GetBufferSize(&keepalive_frames)) && SUCCEEDED(keepalive->GetService(IID_PPV_ARGS(&keepalive_render))))
+		keepalive->Start();
+	else
+	{
+		keepalive.Reset();
+		keepalive_render.Reset();
+	}
+	// "VR headset only": the PC's speakers are muted while streaming (restored at the end); loopback capture is taken
+	// before the endpoint volume
+	if (device == "mute-speakers" &&
+	    SUCCEEDED(endpoint->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, reinterpret_cast<void **>(volume.GetAddressOf()))))
+	{
+		BOOL already = FALSE;
+		volume->GetMute(&already);
+		if (!already && SUCCEEDED(volume->SetMute(TRUE, nullptr)))
+			muted_by_us = true;
+	}
 
 	while (!quit)
 	{
+		if (keepalive_render) // top the silent stream up
+		{
+			UINT32 padding = 0;
+			if (SUCCEEDED(keepalive->GetCurrentPadding(&padding)) && padding < keepalive_frames / 2)
+			{
+				BYTE * buffer = nullptr;
+				const UINT32 frames = keepalive_frames - padding;
+				if (SUCCEEDED(keepalive_render->GetBuffer(frames, &buffer)))
+					keepalive_render->ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT);
+			}
+		}
 		UINT32 available = 0;
 		if (FAILED(capture->GetNextPacketSize(&available)) || !available)
 		{
@@ -236,9 +299,10 @@ void desktop_audio_sender::run()
 			converted_size = needed;
 		}
 		const uint8_t * in[1] = {silent ? nullptr : data};
-		if (silent)
+		if (silent) // silence is sent too: the stream stays continuous
 		{
-			std::memset(converted, 0, size_t(needed));
+			const int64_t out = av_rescale_rnd(frames, sample_rate, mix->nSamplesPerSec, AV_ROUND_NEAR_INF);
+			pending.insert(pending.end(), size_t(out) * channels * sizeof(int16_t), uint8_t(0));
 		}
 		else
 		{
@@ -324,7 +388,7 @@ void mic_player::run()
 	};
 
 	if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))) ||
-	    !(endpoint = named_device(enumerator.Get(), eRender, mic_device_name())))
+	    !(endpoint = named_device(enumerator.Get(), eRender, mic_device_name(), false)))
 	{
 		cleanup();
 		return;

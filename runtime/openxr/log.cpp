@@ -53,9 +53,7 @@ namespace opendesk_openxr::log {
             size_t offset = std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %z: ", std::localtime(&now));
             vsnprintf_s(buf + offset, sizeof(buf) - offset, _TRUNCATE, fmt, va);
             OutputDebugStringA(buf);
-#ifndef _WIN32
             ovrvd_Log((std::string("openxr: ") + (buf + offset)).c_str()); // the streamer's log (bounded there)
-#endif
             if (logStream.is_open()) {
                 logStream << buf;
                 logStream.flush();

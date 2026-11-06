@@ -419,7 +419,10 @@ void native_engine::start(QStringList accounts_, QJsonObject options_)
 
 void native_engine::set_accounts(QStringList list)
 {
-	accounts = QSet<QString>(list.begin(), list.end());
+	QSet<QString> next(list.begin(), list.end());
+	if (next == accounts && !list.isEmpty())
+		return; // the GUI resends them with every settings change
+	accounts = next;
 	info("allowed accounts: " + list.join(", "));
 }
 
@@ -864,7 +867,11 @@ void native_engine::on_data_connection()
 			int w = options.desktop_width, h = options.desktop_height;
 			if (w > 0 && h > 0)
 				current->injector->set_layout({w, h, {{{0, 0, w, h}, {}}}});
+#ifdef _WIN32
+			info(QString("[input] input injection ready (pointers as %1)").arg(options.touch ? "touch" : "mouse"));
+#else
 			info(QString("uinput devices ready (pointers as %1)").arg(options.touch ? "touch" : "mouse"));
+#endif
 		}
 		catch (const std::exception & e)
 		{
@@ -1096,10 +1103,12 @@ void native_engine::update_video(bool force)
 	if (!sess->displays)
 	{
 		sess->displays = std::make_unique<display_manager>();
+#ifndef _WIN32 // Windows: DXGI capture, logged by the capture itself
 		if (!sess->displays->is_kwin())
 			info(sess->displays->is_x11() ? QString("[capture] X11 session: monitors from XRandR, grabbed directly (MIT-SHM)")
 			                               : "[capture] KWin screen cast unavailable (" + sess->displays->kwin_unavailable_reason() +
 			                                         ") - using the desktop portal (no virtual monitors)");
+#endif
 		connect(sess->displays.get(), &display_manager::restore_token, this, [this](QString t) { save_portal_token(t); });
 		connect(sess->displays.get(), &display_manager::log, this, &native_engine::info);
 #ifdef _WIN32
@@ -2441,6 +2450,17 @@ void native_engine::setup_audio_output(session * sess)
 		info("[audio] 'Computer only': not streaming desktop audio");
 		return;
 	}
+#ifdef _WIN32
+	// WASAPI loopback of the default output; "VR headset only" mutes the PC's speakers while streaming (no virtual
+	// output device on Windows without a driver)
+	device = options.audio_mode == 1 ? "mute-speakers" : "default";
+	sess->audio = std::make_unique<desktop_audio_sender>(*sess->audio_out, device, audio_enabled);
+	sess->audio->set_paused(bool(sess->player));
+	info(QString("[audio] %1: capturing the default output -> headset (s16le 48 kHz stereo, 5 ms)%2%3")
+	             .arg(options.audio_mode == 1 ? "VR headset only" : "VR headset & computer",
+	                  options.audio_mode == 1 ? ", PC speakers muted while streaming" : "", sess->encrypted ? ", encrypted" : ""));
+	return;
+#endif
 	if (options.audio_mode == 1 && pa)
 	{
 		if (options.virtual_audio)
@@ -2490,7 +2510,17 @@ void native_engine::on_mic_packet(session * sess, const uint8_t * pcm, size_t si
 			}
 		}
 		sess->mic = std::make_unique<mic_player>(float(sess->user.value("MicVolume").toDouble(0.85)));
+#ifdef _WIN32
+		const QString cable = QString::fromStdString(virtual_mic_device());
+		if (virtual_mic_available())
+			info(QString("[audio] headset mic -> '%1' (apps record it from the cable's output, e.g. 'CABLE Output')").arg(cable));
+		else
+			info(QString("[audio] headset mic not forwarded: no '%1' device. Windows needs a virtual audio cable for this - "
+			             "install VB-CABLE (vb-audio.com/Cable), then choose 'CABLE Output' as the microphone in your apps")
+			             .arg(cable));
+#else
 		info(QString("[audio] headset mic -> 'OpenDesk Microphone'%1").arg(options.auto_select_mic ? " (selected as default input)" : ""));
+#endif
 	}
 	sess->mic->push(pcm, size);
 }
