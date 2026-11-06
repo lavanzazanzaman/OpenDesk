@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.25)
+project(opendesk VERSION 1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(OPENDESK_RUNTIME_ONLY "Build the runtime separately for Steam's older container ABI" OFF)
+if(OPENDESK_RUNTIME_ONLY)
+    add_library(odvrclient STATIC core/vr/vr_ipc.cpp core/vr/vr_client.cpp)
+    target_include_directories(odvrclient PUBLIC core/vr core/engine core/proto)
+    set_target_properties(odvrclient PROPERTIES POSITION_INDEPENDENT_CODE ON)
+else()
+    add_subdirectory(core)
+    add_subdirectory(streamer)
+endif()
+if(NOT WIN32)
+    add_subdirectory(runtime)
+endif()

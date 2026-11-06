@@ -1,0 +1,59 @@
+#!/bin/sh
+set -eu
+APPDIR=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+# The host's libraries where it has them (usr/lib/optional holds the fallbacks): the graphics stack always; Qt and
+# FFmpeg only as a whole group - a host QtCore with a bundled QtGui (or mixed libav* versions) would not fit together.
+selected=$(mktemp -d "${TMPDIR:-/tmp}/opendesk-libs.XXXXXXXX")
+trap 'rm -rf "$selected"' EXIT HUP INT TERM
+cache=$selected/ldcache
+if command -v ldconfig >/dev/null 2>&1; then ldconfig -p > "$cache"; else /sbin/ldconfig -p > "$cache"; fi
+host_of() { awk -v name="$1" '$1 == name && /x86-64/ { print $NF; exit }' "$cache"; }
+
+# Qt: the Qt libraries the program loads (usr/lib/opendesk/qt-libs) on the host, at least the Qt this was built with
+# (6.N symbol versions), and its platform plugins
+use_host_qt=1
+qt_minor=$(cut -d. -f2 "$APPDIR/usr/lib/opendesk/qt-version" 2>/dev/null || echo 99)
+for name in $(cat "$APPDIR/usr/lib/opendesk/qt-libs" 2>/dev/null || echo libQt6Core.so.6); do
+    [ -n "$(host_of "$name")" ] || { use_host_qt=0; break; }
+done
+host_core=$(host_of libQt6Core.so.6)
+host_plugins=""
+for dir in /usr/lib/qt6/plugins /usr/lib64/qt6/plugins /usr/lib/x86_64-linux-gnu/qt6/plugins; do
+    [ -d "$dir/platforms" ] && { host_plugins=$dir; break; }
+done
+if [ "$use_host_qt" = 1 ] && { [ -z "$host_core" ] || [ -z "$host_plugins" ] || ! grep -aq "Qt_6.$qt_minor" "$host_core"; }; then
+    use_host_qt=0
+fi
+# FFmpeg: the host's only if it has every one of ours (same SONAMEs = same ABI)
+use_host_ffmpeg=1
+for library in "$APPDIR"/usr/lib/optional/lib*av*.so* "$APPDIR"/usr/lib/optional/libsw*.so* "$APPDIR"/usr/lib/optional/libpostproc*.so*; do
+    [ -e "$library" ] || continue
+    [ -n "$(host_of "${library##*/}")" ] || { use_host_ffmpeg=0; break; }
+done
+
+for library in "$APPDIR"/usr/lib/optional/*.so*; do
+    name=${library##*/}
+    case $name in
+        libQt6*) [ "$use_host_qt" = 1 ] && host=$(host_of "$name") || host="" ;;
+        libavcodec*|libavformat*|libavutil*|libavfilter*|libavdevice*|libswscale*|libswresample*|libpostproc*)
+            [ "$use_host_ffmpeg" = 1 ] && host=$(host_of "$name") || host="" ;;
+        *) host=$(host_of "$name") ;;
+    esac
+    ln -s "${host:-$library}" "$selected/$name"
+done
+rm "$cache"
+if [ "$use_host_qt" = 1 ]; then
+    # the host's plugins fit the host's Qt (the bundled ones use the bundled Qt's private API)
+    export QT_PLUGIN_PATH="$host_plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$host_plugins/platforms"
+fi
+[ -n "${OPENDESK_APPIMAGE_DEBUG:-}" ] && echo "opendesk AppImage: Qt from the $([ "$use_host_qt" = 1 ] && echo host || echo bundle)," \
+    "FFmpeg from the $([ "$use_host_ffmpeg" = 1 ] && echo host || echo bundle)" >&2
+# main() restores LD_LIBRARY_PATH before it launches any external processes.
+OPENDESK_APPIMAGE_LD_LIBRARY_PATH=${LD_LIBRARY_PATH-} \
+LD_LIBRARY_PATH="$selected:$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$APPDIR/usr/bin/opendesk-streamer" "$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true; rm -rf "$selected"' HUP INT TERM
+status=0
+wait "$child" || status=$?
+exit "$status"

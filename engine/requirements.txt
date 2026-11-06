@@ -1,0 +1,5 @@
+cryptography
+lz4
+evdev
+moderngl
+numpy

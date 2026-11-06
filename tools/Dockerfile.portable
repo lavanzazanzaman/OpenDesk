@@ -1,0 +1,7 @@
+FROM ubuntu:24.04
+RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build pkg-config qt6-base-dev qt6-wayland libssl-dev liblz4-dev libevdev-dev \
+    libpulse-dev libpipewire-0.3-dev libavcodec-dev libavfilter-dev libavutil-dev libavformat-dev libswscale-dev \
+    libwayland-dev wayland-protocols plasma-wayland-protocols libgbm-dev libegl-dev libgles-dev libvulkan-dev \
+    glslc libopenxr-dev libfmt-dev libx11-dev libxext-dev libxrandr-dev libxfixes-dev patchelf squashfs-tools curl ca-certificates python3 \
+    libqt6svg6 libqt6waylandclient6 libqt6waylandcompositor6 && rm -rf /var/lib/apt/lists/*

@@ -1,0 +1,37 @@
+# OpenDesk Streamer - Arch package built from this source tree.
+#   cd packaging/arch && makepkg -si
+# OPENDESK_SRC overrides the tree (default: the repository this PKGBUILD sits in).
+pkgname=opendesk-streamer
+pkgver=1.0.r123.gec5d795
+pkgrel=1
+pkgdesc="OpenDesk Streamer: desktop, videos and VR streaming to a standalone headset"
+arch=('x86_64')
+license=('MIT')
+depends=('qt6-base' 'qt6-wayland' 'ffmpeg' 'libpipewire' 'libpulse' 'libevdev' 'lz4' 'openssl' 'vulkan-icd-loader'
+         'libglvnd' 'mesa' 'wayland' 'libx11' 'libxext' 'libxrandr' 'libxfixes' 'xdg-desktop-portal' 'kscreen')
+makedepends=('cmake' 'ninja' 'shaderc' 'vulkan-headers' 'wayland-protocols' 'python' 'git' 'openxr')
+optdepends=('xdg-desktop-portal-kde: screen capture outside KWin'
+            'yt-dlp: Videos tab "Paste URL"'
+            'nerd-dictation: the headset keyboard dictation key'
+            'cargo: build xrizer from source if its nightly cannot be downloaded')
+options=('!lto' '!debug')
+
+_src() { echo "${OPENDESK_SRC:-$(realpath "$startdir/../..")}"; }
+
+pkgver() {
+	cd "$(_src)"
+	printf "1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+	cmake -S "$(_src)" -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm644 "$(_src)/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+	# third-party licenses (OpenDesk XR, FidelityFX FSR 1, ...)
+	find "$(_src)/runtime" "$(_src)/third_party" -maxdepth 4 -type f \( -iname 'license*' -o -iname 'copying*' \) -print0 |
+		while IFS= read -r -d '' f; do install -Dm644 "$f" "$pkgdir/usr/share/licenses/$pkgname/${f#$(_src)/}"; done
+}

@@ -1,0 +1,84 @@
+#version 450
+// The composited eye image (XRGB8888 packed in R32_UINT, sRGB-encoded) -> NV12 or P010 (BT.709, limited or full range)
+// in the streamer's buffer, which NVENC encodes as is (WiVRn's approach: no conversion pass in the encoder, exact
+// colours, 10-bit). Chroma: the average of each 2x2 block. One invocation converts a 4x2 pixel block, so every write
+// is a whole 32-bit word: NV12 luma 1 word per row, chroma 1 word; P010 luma 2 words per row, chroma 2 words.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, r32ui) uniform readonly uimage2D src;
+layout(set = 0, binding = 1, std430) writeonly buffer dst
+{
+	uint words[];
+};
+layout(push_constant) uniform params
+{
+	uint width, height;   // pixels (multiples of 4 and 2)
+	uint pitch_words;     // bytes per row / 4, both planes
+	uint uv_offset_words; // chroma plane start / 4
+	uint p010;            // 0: NV12, 1: P010
+	uint full_range;
+};
+
+vec3 rgb(ivec2 p)
+{
+	uint v = imageLoad(src, p).r;
+	return vec3((v >> 16) & 255u, (v >> 8) & 255u, v & 255u) / 255.0;
+}
+
+const vec3 bt709 = vec3(0.2126, 0.7152, 0.0722);
+
+uint quant_y(float y)
+{
+	float maxv = p010 != 0u ? 1023.0 : 255.0;
+	float v = full_range != 0u ? y * maxv : (p010 != 0u ? 64.0 + 876.0 * y : 16.0 + 219.0 * y);
+	return uint(clamp(round(v), 0.0, maxv));
+}
+
+uint quant_c(float c) // c in [-0.5, 0.5]
+{
+	float maxv = p010 != 0u ? 1023.0 : 255.0;
+	float mid = p010 != 0u ? 512.0 : 128.0;
+	float v = full_range != 0u ? mid + maxv * c : mid + (p010 != 0u ? 896.0 : 224.0) * c;
+	return uint(clamp(round(v), 0.0, maxv));
+}
+
+void main()
+{
+	uint x0 = gl_GlobalInvocationID.x * 4u, y0 = gl_GlobalInvocationID.y * 2u;
+	if (x0 >= width || y0 >= height)
+		return;
+	uint ys[8];
+	vec3 block[2] = vec3[2](vec3(0), vec3(0));
+	for (uint r = 0u; r < 2u; ++r)
+		for (uint i = 0u; i < 4u; ++i)
+		{
+			vec3 c = rgb(ivec2(x0 + i, y0 + r));
+			ys[r * 4u + i] = quant_y(dot(c, bt709));
+			block[i / 2u] += c;
+		}
+	uint cb[2], cr[2];
+	for (uint k = 0u; k < 2u; ++k)
+	{
+		vec3 c = block[k] * 0.25;
+		float y = dot(c, bt709);
+		cb[k] = quant_c((c.b - y) / 1.8556);
+		cr[k] = quant_c((c.r - y) / 1.5748);
+	}
+	uint uv_row = uv_offset_words + (y0 / 2u) * pitch_words;
+	if (p010 == 0u)
+	{
+		for (uint r = 0u; r < 2u; ++r)
+			words[(y0 + r) * pitch_words + x0 / 4u] = ys[r * 4u] | (ys[r * 4u + 1u] << 8) | (ys[r * 4u + 2u] << 16) | (ys[r * 4u + 3u] << 24);
+		words[uv_row + x0 / 4u] = cb[0] | (cr[0] << 8) | (cb[1] << 16) | (cr[1] << 24);
+	}
+	else // 10 bits in the high bits of each 16-bit sample
+	{
+		for (uint r = 0u; r < 2u; ++r)
+		{
+			uint row = (y0 + r) * pitch_words + x0 / 2u;
+			words[row] = (ys[r * 4u] << 6) | (ys[r * 4u + 1u] << 22);
+			words[row + 1u] = (ys[r * 4u + 2u] << 6) | (ys[r * 4u + 3u] << 22);
+		}
+		words[uv_row + x0 / 2u] = (cb[0] << 6) | (cr[0] << 22);
+		words[uv_row + x0 / 2u + 1u] = (cb[1] << 6) | (cr[1] << 22);
+	}
+}

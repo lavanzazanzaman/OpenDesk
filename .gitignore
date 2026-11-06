@@ -1,0 +1,39 @@
+# Build output
+/build/
+/build-*/
+/dist/
+/out/
+/install/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+*.ninja
+.ninja_*
+
+# Python
+/engine/.venv/
+__pycache__/
+*.py[cod]
+
+# Local data and reverse-engineering artefacts
+/.cache/
+*.apk
+*.exe
+*.msi
+*.AppImage
+*.tar.gz
+*.tar.zst
+*.log
+
+# Compatibility shim for old local checkouts: the upstream submodule is no longer used
+/vdxr/
+
+# Unrelated local tools kept outside the repository
+/tools/tf2vr/
+/tools/visibility-probe/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
