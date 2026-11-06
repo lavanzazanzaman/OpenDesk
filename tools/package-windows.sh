@@ -17,11 +17,25 @@ EXE="$BUILD/streamer/opendesk-streamer.exe"
 [ -f "$EXE" ] || { echo "missing $EXE" >&2; exit 1; }
 cp "$EXE" "$DEST/OpenDesk.exe"
 
-# Qt: platform plugins, image formats and the C++ runtime next to the executable.
-DEPLOY_QT=$(command -v windeployqt6 || command -v windeployqt)
-[ -n "$DEPLOY_QT" ] || { echo "windeployqt not found (install Qt 6 tools)" >&2; exit 1; }
-"$DEPLOY_QT" --release --no-translations --no-system-d3d-compiler --no-opengl-sw \
-    --no-quick-import --skip-plugin-types qmltooling "$DEST/OpenDesk.exe"
+# Cross-build from Linux (tools/windows/llvm-mingw.cmake): OPENDESK_WIN_SYSROOT=<sysroot>/clang64. DLLs come from the
+# sysroot and llvm-mingw, the Qt plugins are copied by hand (no windeployqt on Linux).
+OBJDUMP=objdump
+if [ -n "${OPENDESK_WIN_SYSROOT:-}" ]; then
+    LLVM_MINGW=${LLVM_MINGW:-/opt/llvm-mingw}
+    OBJDUMP=$LLVM_MINGW/bin/x86_64-w64-mingw32-objdump
+    PREFIX=$OPENDESK_WIN_SYSROOT
+    export PATH="$OPENDESK_WIN_SYSROOT/bin:$LLVM_MINGW/x86_64-w64-mingw32/bin:$PATH"
+    for kind in platforms styles imageformats tls networkinformation; do
+        [ -d "$PREFIX/share/qt6/plugins/$kind" ] && { mkdir -p "$DEST/$kind"; cp "$PREFIX/share/qt6/plugins/$kind/"*.dll "$DEST/$kind/"; }
+    done
+    printf '[Paths]\r\nPlugins = .\r\n' > "$DEST/qt.conf"
+else
+    # Qt: platform plugins, image formats and the C++ runtime next to the executable.
+    DEPLOY_QT=$(command -v windeployqt6 || command -v windeployqt)
+    [ -n "$DEPLOY_QT" ] || { echo "windeployqt not found (install Qt 6 tools)" >&2; exit 1; }
+    "$DEPLOY_QT" --release --no-translations --no-system-d3d-compiler --no-opengl-sw \
+        --no-quick-import --skip-plugin-types qmltooling "$DEST/OpenDesk.exe"
+fi
 
 # Copy every MinGW DLL the executable and its plugins pull in (FFmpeg, OpenSSL, lz4, ...) transitively.
 # objdump is part of binutils (already installed); this avoids depending on ldd/ntldd behaviour.
@@ -38,11 +52,18 @@ copy_missing_deps() {
         esac
         [ -e "$DEST/$name" ] && continue
         src=$(command -v "$name" 2>/dev/null || true)
+        if [ -z "$src" ]; then # DLLs without the executable bit: look through PATH by hand
+            for dir in ${PATH//:/ }; do
+                for cand in "$dir/$name" "$dir/$(echo "$name" | tr '[:upper:]' '[:lower:]')"; do
+                    [ -f "$cand" ] && { src=$cand; break 2; }
+                done
+            done
+        fi
         if [ -n "$src" ] && [ -f "$src" ]; then
             cp "$src" "$DEST/$name"
             echo "  $name"
         fi
-    done < <(objdump -p "$file" 2>/dev/null | awk '/DLL Name:/ {print $3}')
+    done < <("$OBJDUMP" -p "$file" 2>/dev/null | awk '/DLL Name:/ {print $3}')
 }
 
 for _ in 1 2 3 4 5 6; do
