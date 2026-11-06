@@ -123,6 +123,8 @@ void StreamerSettings::resetAdvanced()
 	useFovStencil = true;
 	softFoveaEdge = false;
 	boostGamePriority = false;
+	dxvkByDefault = false;
+	dxvkGames.clear();
 	mouthSensitivity = 2.0;
 	reportedStreamerVersion = "1.20.3";
 	save();
@@ -181,6 +183,14 @@ void StreamerSettings::load()
 	b("UseFovStencil", useFovStencil);
 	b("SoftFoveaEdge", softFoveaEdge);
 	b("BoostGamePriority", boostGamePriority);
+	b("DxvkByDefault", dxvkByDefault);
+	if (o.contains("DxvkGames"))
+	{
+		dxvkGames.clear();
+		const QJsonObject g = o["DxvkGames"].toObject();
+		for (auto it = g.begin(); it != g.end(); ++it)
+			dxvkGames[it.key()] = it.value().toBool();
+	}
 	d("MouthSensitivity", mouthSensitivity);
 	s("ReportedStreamerVersion", reportedStreamerVersion);
 	if (reportedStreamerVersion.isEmpty())
@@ -233,6 +243,13 @@ void StreamerSettings::save()
 	o["UseFovStencil"] = useFovStencil;
 	o["SoftFoveaEdge"] = softFoveaEdge;
 	o["BoostGamePriority"] = boostGamePriority;
+	o["DxvkByDefault"] = dxvkByDefault;
+	{
+		QJsonObject g;
+		for (auto it = dxvkGames.begin(); it != dxvkGames.end(); ++it)
+			g[it.key()] = it.value();
+		o["DxvkGames"] = g;
+	}
 	o["MouthSensitivity"] = mouthSensitivity;
 	o["ReportedStreamerVersion"] = reportedStreamerVersion;
 

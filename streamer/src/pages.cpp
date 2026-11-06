@@ -4,6 +4,11 @@
 #include "settings.h"
 #include "setup.h"
 #include "sysinfo.h"
+#ifdef _WIN32
+#include "dxvk_win.h"
+#include "games.h"
+#include <QListWidget>
+#endif
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -618,11 +623,77 @@ QWidget * makeAdvancedPage(Engine & engine)
 	                   "Optimizes game rendering by not rendering the corners. Only uncheck when recording gameplay "
 	                   "(requires restart of the game)",
 	                   true, [&engine] { engine.applyOptions(); }));
+#ifdef _WIN32
+	v->addWidget(check("Boost game priority", s.boostGamePriority,
+	                   "Only enable if experiencing game freezes or stutter. Raises the priority of the game's render thread\n"
+	                   "(highest thread priority, process above normal). Takes effect right away",
+	                   true, [&engine] { engine.applyOptions(); }));
+
+	// DXVK per game: Direct3D 11 games rendered through Vulkan (what Proton does on Linux)
+	v->addWidget(section("DXVK (Direct3D 11 games on Vulkan)", 10));
+	auto * dxvk_games = new QListWidget;
+	dxvk_games->setMinimumHeight(140);
+	dxvk_games->setToolTip("Checked games run with DXVK: OpenDesk places DXVK's d3d11.dll and dxgi.dll next to the game and removes\n"
+	                       "them again when unchecked. Games with anti-cheat may refuse modified files - leave those unchecked.\n"
+	                       "Takes effect the next time the game starts");
+	auto fill_dxvk = [dxvk_games](std::vector<od::game_entry> games) {
+		QSignalBlocker block(dxvk_games);
+		dxvk_games->clear();
+		auto & st = StreamerSettings::instance();
+		for (const auto & g: games)
+		{
+			if (g.install_dir.isEmpty())
+				continue;
+			auto * item = new QListWidgetItem(g.name, dxvk_games);
+			item->setData(Qt::UserRole, od::dxvk::game_key(g));
+			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+			item->setCheckState(od::dxvk::wanted(g, st.dxvkByDefault, st.dxvkGames) ? Qt::Checked : Qt::Unchecked);
+		}
+		if (games.empty())
+			new QListWidgetItem("No VR games found", dxvk_games);
+	};
+	QObject::connect(dxvk_games, &QListWidget::itemChanged, [&engine](QListWidgetItem * item) {
+		const QString key = item->data(Qt::UserRole).toString();
+		if (key.isEmpty())
+			return;
+		auto & st = StreamerSettings::instance();
+		st.dxvkGames[key] = item->checkState() == Qt::Checked;
+		st.save();
+		engine.applyOptions();
+	});
+	v->addWidget(check("Use DXVK for VR games by default", s.dxvkByDefault,
+	                   "Games you haven't set below follow this (off: Direct3D 11 as usual)", true, [&engine, dxvk_games] {
+		                   auto & st = StreamerSettings::instance();
+		                   for (int i = 0; i < dxvk_games->count(); ++i) // games without their own setting follow
+		                   {
+			                   auto * item = dxvk_games->item(i);
+			                   const QString key = item->data(Qt::UserRole).toString();
+			                   if (!key.isEmpty() && !st.dxvkGames.contains(key))
+			                   {
+				                   QSignalBlocker block(dxvk_games);
+				                   item->setCheckState(st.dxvkByDefault ? Qt::Checked : Qt::Unchecked);
+			                   }
+		                   }
+		                   engine.applyOptions();
+	                   }));
+	v->addWidget(dxvk_games);
+	{
+		QPointer<QListWidget> list(dxvk_games);
+		std::thread([list, fill_dxvk] {
+			auto games = od::scan_games(); // reads the Steam / Oculus libraries: off the UI thread
+			QMetaObject::invokeMethod(qApp, [list, fill_dxvk, games = std::move(games)]() mutable {
+				if (list)
+					fill_dxvk(std::move(games));
+			});
+		}).detach();
+	}
+#else
 	v->addWidget(check("Boost game priority", s.boostGamePriority,
 	                   "Only enable if experiencing game freezes or stutter. Raises the priority of the game's render thread\n"
 	                   "(Linux: CPU priority through rtkit; Windows raises the GPU priority, which needs root here).\n"
 	                   "Takes effect right away",
 	                   true, [&engine] { engine.applyOptions(); }));
+#endif
 	auto * mouth = section("Mouth Sensitivity", 10);
 	mouth->setToolTip("Face tracking to VRChat (Quest Pro): how strongly the avatar's mouth and jaw follow yours. 1.0x = the\n"
 	                  "headset's values as they are; higher makes normal talking visible without opening wide (closed\n"

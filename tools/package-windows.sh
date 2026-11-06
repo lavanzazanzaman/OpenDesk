@@ -77,12 +77,32 @@ for _ in 1 2 3 4 5 6; do
 done
 
 # VR: OpenDesk XR + libovr-opendesk (self-contained: no C++ runtime DLLs) and, when built, xrizer for OpenVR games
+# (tools/windows/build-xrizer.sh; default build-xrizer-win)
 mkdir -p "$DEST/runtime"
 cp "$BUILD/runtime/opendesk-openxr.dll" "$BUILD/runtime/ovr-vd.dll" "$BUILD/runtime/opendesk_xr.json" "$DEST/runtime/"
-if [ -n "${OPENDESK_XRIZER_WIN:-}" ] && [ -f "$OPENDESK_XRIZER_WIN/bin/win64/vrclient_x64.dll" ]; then
+XRIZER_WIN=${OPENDESK_XRIZER_WIN:-$ROOT/build-xrizer-win}
+if [ -f "$XRIZER_WIN/bin/win64/vrclient_x64.dll" ]; then
     mkdir -p "$DEST/xrizer"
-    cp -r "$OPENDESK_XRIZER_WIN/bin" "$DEST/xrizer/"
+    cp -r "$XRIZER_WIN/bin" "$XRIZER_WIN/version.txt" "$DEST/xrizer/"
+    echo "  xrizer: $(cat "$XRIZER_WIN/version.txt")"
+else
+    echo "  no xrizer build (tools/windows/build-xrizer.sh): OpenVR games will need SteamVR" >&2
 fi
+
+# DXVK for the per-game "DXVK" switch (zlib license), pinned and checked
+DXVK_VERSION=3.1.1
+DXVK_SHA256=40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608
+DOWNLOADS=${OPENDESK_DOWNLOADS:-$ROOT/../toolchain/downloads}
+mkdir -p "$DOWNLOADS"
+DXVK_TAR=$DOWNLOADS/dxvk-$DXVK_VERSION.tar.gz
+[ -s "$DXVK_TAR" ] || curl -fsSL -o "$DXVK_TAR" "https://github.com/doitsujin/dxvk/releases/download/v$DXVK_VERSION/dxvk-$DXVK_VERSION.tar.gz"
+echo "$DXVK_SHA256  $DXVK_TAR" | sha256sum -c --quiet - || { echo "DXVK download checksum mismatch" >&2; exit 1; }
+mkdir -p "$DEST/dxvk/x64"
+tar -xzf "$DXVK_TAR" -C "$DEST/dxvk/x64" --strip-components=2 "dxvk-$DXVK_VERSION/x64/d3d11.dll" "dxvk-$DXVK_VERSION/x64/dxgi.dll"
+DXVK_LICENSE=$DOWNLOADS/dxvk-$DXVK_VERSION-LICENSE
+[ -s "$DXVK_LICENSE" ] || curl -fsSL -o "$DXVK_LICENSE" "https://raw.githubusercontent.com/doitsujin/dxvk/v$DXVK_VERSION/LICENSE"
+cp "$DXVK_LICENSE" "$DEST/dxvk/LICENSE.txt"
+echo "$DXVK_VERSION" > "$DEST/dxvk/VERSION.txt"
 
 # FFmpeg's encoders load no external DLLs, but the runtime side needs its data files when present.
 for d in "$PREFIX"/share/ffmpeg "$PREFIX"/share/opendesk; do

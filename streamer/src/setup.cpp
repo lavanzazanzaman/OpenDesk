@@ -607,8 +607,11 @@ void SetupDialog::fix()
 #include "settings.h"
 
 #include "hardware_encoder.h"
+#include "app_paths.h"
+#include "dxvk_win.h"
 #include "games.h"
 #include "platform.h"
+#include "runtime_registration.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -703,11 +706,60 @@ SetupItem libraryItem()
 	return item("Game libraries", true, found.isEmpty() ? "No Steam or Oculus installation found (desktop streaming still works)"
 	                                                   : found.join(" and ") + " found");
 }
+// OpenDesk XR as the system's OpenXR runtime (HKLM: the installer sets it; else one elevated reg.exe)
+SetupItem openxrItem()
+{
+	const QString manifest = QDir::toNativeSeparators(od::resource_dir("runtime", "") + "/opendesk_xr.json");
+	if (!QFileInfo::exists(manifest))
+		return item("OpenXR runtime", false, "OpenDesk XR is missing from this installation (" + manifest + "); reinstall OpenDesk");
+	if (od::openxr_runtime::active())
+		return item("OpenXR runtime", true, "OpenDesk XR is the active OpenXR runtime: OpenXR games render through OpenDesk");
+	SetupItem i = item("OpenXR runtime", false,
+	                   "Another OpenXR runtime is active, so OpenXR games won't stream. Fixing it makes OpenDesk XR the active "
+	                   "runtime (Windows asks for administrator rights).");
+	i.userFix = [manifest] {
+		const std::wstring args = L"add \"HKLM\\SOFTWARE\\Khronos\\OpenXR\\1\" /v ActiveRuntime /t REG_SZ /d \"" + manifest.toStdWString() +
+		                          L"\" /f /reg:64";
+		const HINSTANCE r = ShellExecuteW(nullptr, L"runas", L"reg.exe", args.c_str(), nullptr, SW_HIDE);
+		return INT_PTR(r) > 32 ? QString() : QString("Windows did not change the OpenXR runtime (UAC was cancelled?)");
+	};
+	return i;
+}
+
+SetupItem openvrItem()
+{
+	const std::string xrizer = od::openvr_runtime::find_xrizer();
+	if (xrizer.empty())
+		return item("OpenVR games without SteamVR", false,
+		            "xrizer is missing from this installation: OpenVR games need SteamVR. Reinstall OpenDesk.");
+	return item("OpenVR games without SteamVR", true,
+	            QString("xrizer (%1) runs OpenVR games on OpenDesk XR while the streamer runs")
+	                    .arg(QString::fromStdString(od::openvr_runtime::xrizer_version().empty() ? xrizer : od::openvr_runtime::xrizer_version())));
+}
+
+SetupItem dxvkItem()
+{
+	const QString dir = od::dxvk::bundled_dir();
+	QFile version(od::resource_dir("dxvk", "") + "/VERSION.txt");
+	const QString v = version.open(QIODevice::ReadOnly) ? QString::fromUtf8(version.readAll()).trimmed() : QString();
+	return item("DXVK", !dir.isEmpty(),
+	            dir.isEmpty() ? "DXVK is missing from this installation: the per-game DXVK option (VR page) does nothing"
+	                          : QString("DXVK %1 is available for the per-game DXVK option (VR page)").arg(v));
+}
+// optional: virtual monitors (Add monitor / Extra display) come from the Virtual Display Driver
+SetupItem virtualMonitorItem()
+{
+	const bool present = WaitNamedPipeW(L"\\\\.\\pipe\\MTTVirtualDisplayPipe", 0) || GetLastError() == ERROR_SEM_TIMEOUT;
+	return item("Virtual monitors (optional)", true,
+	            present ? "The Virtual Display Driver is installed: Add monitor and Extra display create virtual monitors"
+	                    : "Add monitor and Extra display use your physical monitors only. For virtual monitors, install the "
+	                      "Virtual Display Driver: github.com/VirtualDrivers/Virtual-Display-Driver");
+}
 } // namespace
 
 QList<SetupItem> runSetupChecks()
 {
-	return {encoderItem(), firewallItem(), audioItem(), libraryItem()};
+	return {encoderItem(), firewallItem(), audioItem(), libraryItem(), openxrItem(), openvrItem(), dxvkItem(), virtualMonitorItem()};
 }
 
 SetupDialog::SetupDialog(QWidget * parent) :

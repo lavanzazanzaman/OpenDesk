@@ -158,9 +158,19 @@ windows_openxr() {
 	[ $app -eq 0 ]
 }
 
+XRIZER_SRC=${OPENDESK_XRIZER_SRC:-$(cd "$ROOT/.." && pwd)/xrizer-opendesk}
+windows_xrizer() {
+	LLVM_MINGW=$LLVM_MINGW OPENDESK_WIN_SYSROOT=$SYSROOT bash "$ROOT/tools/windows/build-xrizer.sh" "$XRIZER_SRC" "$CI/xrizer-win"
+}
+
 run_windows() {
 	step windows-sysroot windows_sysroot
 	step windows-build windows_build
+	if [ -f "$XRIZER_SRC/Cargo.toml" ] && command -v cargo >/dev/null; then
+		step windows-xrizer windows_xrizer
+	else
+		skip windows-xrizer "no xrizer source at $XRIZER_SRC (or no cargo)"
+	fi
 	if ! command -v wine >/dev/null; then
 		skip windows-wine-tests "wine not installed"
 		return
@@ -171,7 +181,8 @@ run_windows() {
 
 # ---------------------------------------------------------------------------------------------------------------------
 package_windows() {
-	OPENDESK_WIN_SYSROOT=$SYSROOT LLVM_MINGW=$LLVM_MINGW bash "$ROOT/tools/package-windows.sh" "$CI/windows"
+	OPENDESK_WIN_SYSROOT=$SYSROOT LLVM_MINGW=$LLVM_MINGW OPENDESK_XRIZER_WIN=$CI/xrizer-win \
+		bash "$ROOT/tools/package-windows.sh" "$CI/windows"
 }
 
 installer_windows() {

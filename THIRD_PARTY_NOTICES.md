@@ -47,7 +47,16 @@ must comply with those licenses.
 `tools/get_xrizer.sh` can download or build
 [xrizer](https://github.com/Supreeeme/xrizer), which is GPL-3.0. xrizer is not
 part of this repository; it is fetched separately and runs as its own OpenVR
-runtime.
+runtime. The Windows build comes from a separate GPL-3.0 fork with a Direct3D 11
+backend (built by `tools/windows/build-xrizer.sh`) and is shipped as its own
+program, with the Khronos OpenXR loader (Apache-2.0) next to it.
+
+## DXVK
+
+The Windows package includes [DXVK](https://github.com/doitsujin/dxvk)'s
+`d3d11.dll` and `dxgi.dll` (zlib license, `dxvk\LICENSE.txt`) for the per-game
+DXVK option. `runtime/libovr-opendesk/dxvk_interop.h` declares DXVK's Vulkan
+interop interfaces (zlib license).
 
 ## Face tracking definitions
 

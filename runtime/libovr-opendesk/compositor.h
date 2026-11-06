@@ -29,6 +29,7 @@ struct ID3D11Device5;
 struct ID3D11DeviceContext4;
 struct ID3D11Fence;
 struct ID3D11Texture2D;
+struct IDXGIVkInteropDevice1;
 #endif
 #include <vulkan/vulkan.h>
 
@@ -53,6 +54,7 @@ struct swapchain
 	std::vector<ID3D11Texture2D *> textures; // D3D11 mode: what the app renders into (`shared` imports them)
 	uint32_t dxgi_format = 0;
 	uint32_t mip_levels = 1;
+	bool dxvk = false; // `shared` are DXVK's own images (not ours to destroy), in whatever layout DXVK keeps them
 #endif
 };
 
@@ -89,8 +91,10 @@ public:
 	compositor(VkPhysicalDevice, VkDevice, VkQueue, uint32_t queue_family);
 #ifdef _WIN32
 	// Direct3D 11 mode: the app's (OpenDesk XR's submission) device
+	// DXVK's D3D11 (IDXGIVkInteropDevice1): composites on DXVK's own VkDevice and queue instead (no shared resources)
 	explicit compositor(ID3D11Device *);
 	bool d3d11() const { return d3d_device != nullptr; }
+	bool dxvk_mode() const { return dxvk != nullptr; }
 	// textures of `dxgi_format` (typeless allowed: `format` is what we sample them as); `shared_ok` false for depth
 	std::unique_ptr<swapchain> create_swapchain_d3d11(uint32_t dxgi_format, VkFormat format, uint32_t width, uint32_t height,
 	                                                  uint32_t array_size, uint32_t mip_levels, uint32_t sample_count,
@@ -157,6 +161,9 @@ private:
 	void release_outputs();
 	static uint32_t memory_type(const VkPhysicalDeviceMemoryProperties &, uint32_t bits, VkMemoryPropertyFlags);
 	void one_time_submit(void (*record)(VkCommandBuffer, void *), void * ctx);     // on the compositor's device
+	// the compositor's queue (DXVK mode: DXVK's, used under its submission lock)
+	VkResult queue_submit(const VkSubmitInfo &, VkFence);
+	void queue_idle();
 	void app_submit(void (*record)(VkCommandBuffer, void *), void * ctx);         // on the app's queue, waits
 	void create_private_device();
 
@@ -179,6 +186,7 @@ private:
 	uint64_t fence_value = 0;
 	uint64_t luid = 0; // the D3D11 adapter
 	void create_d3d11_sync();
+	IDXGIVkInteropDevice1 * dxvk = nullptr; // DXVK mode: device/queue/physical/instance are DXVK's (borrowed)
 #else
 	PFN_vkGetMemoryFdKHR get_memory_fd = nullptr;
 #endif

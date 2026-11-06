@@ -24,7 +24,7 @@ needed.
 |---|---|---|
 | Discovery and pairing | ✅ | ✅ |
 | Desktop streaming (H.264 / HEVC / AV1) | ✅ | ✅ |
-| Multi-monitor and virtual displays | ✅ | ✅ physical monitors |
+| Multi-monitor and virtual displays | ✅ | ✅ (virtual monitors with the [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)) |
 | Keyboard, mouse, touch, laser pointer | ✅ | ✅ |
 | Desktop audio, headset microphone | ✅ | ✅ |
 | Videos tab (local library and playback) | ✅ | ✅ |
@@ -32,7 +32,8 @@ needed.
 | OpenXR runtime ("OpenDesk XR": D3D11 / D3D12 / OpenGL / Vulkan games) | ✅ | 🧪 built, hardware testing pending |
 | Face / eye / body tracking to VRChat | ✅ | ✅ |
 | Spacewarp / foveated VR streaming | ✅ | 🧪 built, hardware testing pending |
-| OpenVR games without SteamVR (xrizer) | ✅ | ⏳ in progress |
+| OpenVR games without SteamVR (xrizer) | ✅ | 🧪 built (D3D11 / OpenGL / Vulkan games), hardware testing pending |
+| DXVK per game (Direct3D 11 on Vulkan) | — (Proton) | 🧪 built, hardware testing pending |
 
 The Linux build is the primary target and is tested against the stock headset
 app. The Windows build runs the same GUI/engine and now includes the VR server,

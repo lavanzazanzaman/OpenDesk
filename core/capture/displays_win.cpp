@@ -4,7 +4,10 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <format>
+#include <thread>
 
 namespace od
 {
@@ -61,6 +64,59 @@ BOOL CALLBACK monitor_proc(HMONITOR monitor, HDC, LPRECT, LPARAM data)
 	out->push_back(std::move(d));
 	return TRUE;
 }
+constexpr const wchar_t * vdd_pipe = L"\\\\.\\pipe\\MTTVirtualDisplayPipe";
+
+// the adapter behind a display ("\\.\DISPLAY3") is the Virtual Display Driver
+bool is_virtual_display(const std::string & device)
+{
+	DISPLAY_DEVICEW dd{};
+	dd.cb = sizeof(dd);
+	for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); ++i, dd.cb = sizeof(dd))
+		if (utf8(dd.DeviceName) == device)
+			return std::wstring(dd.DeviceString).find(L"Virtual Display") != std::wstring::npos;
+	return false;
+}
+
+std::vector<std::string> virtual_displays(const std::vector<display_info> & all)
+{
+	std::vector<std::string> out;
+	for (const auto & d: all)
+		if (is_virtual_display(d.name))
+			out.push_back(d.name);
+	return out;
+}
+
+// one command to the driver ("SETDISPLAYCOUNT 2"): UTF-16, one pipe message
+bool vdd_command(const std::wstring & command)
+{
+	if (!WaitNamedPipeW(vdd_pipe, 1000))
+		return false;
+	HANDLE pipe = CreateFileW(vdd_pipe, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+	if (pipe == INVALID_HANDLE_VALUE)
+		return false;
+	DWORD mode = PIPE_READMODE_MESSAGE;
+	SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr);
+	DWORD written = 0;
+	const BOOL ok = WriteFile(pipe, command.c_str(), DWORD(command.size() * sizeof(wchar_t)), &written, nullptr);
+	CloseHandle(pipe);
+	return ok;
+}
+
+// sets a display's mode (not saved in the registry: it's the session's virtual monitor)
+bool set_mode(const std::string & device, const display_manager::virtual_mode & m)
+{
+	const std::wstring name(device.begin(), device.end());
+	DEVMODEW mode{};
+	mode.dmSize = sizeof(mode);
+	mode.dmPelsWidth = DWORD(m.width);
+	mode.dmPelsHeight = DWORD(m.height);
+	mode.dmDisplayFrequency = DWORD((m.refresh_mhz + 500) / 1000);
+	mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+	if (ChangeDisplaySettingsExW(name.c_str(), &mode, nullptr, 0, nullptr) == DISP_CHANGE_SUCCESSFUL)
+		return true;
+	mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT; // the driver's refresh rates may not include ours
+	return ChangeDisplaySettingsExW(name.c_str(), &mode, nullptr, 0, nullptr) == DISP_CHANGE_SUCCESSFUL;
+}
 } // namespace
 
 display_manager::display_manager(QObject * parent) :
@@ -68,7 +124,17 @@ display_manager::display_manager(QObject * parent) :
 {
 }
 
-display_manager::~display_manager() = default;
+display_manager::~display_manager()
+{
+	// the user's own count again (the driver keeps it in its settings)
+	if (base_count >= 0 && !added.empty())
+		vdd_command(std::format(L"SETDISPLAYCOUNT {}", base_count));
+}
+
+bool display_manager::can_create_virtual() const
+{
+	return WaitNamedPipeW(vdd_pipe, 0) || GetLastError() == ERROR_SEM_TIMEOUT;
+}
 
 void display_manager::start(const QString &, std::function<void(QString)> done)
 {
@@ -107,11 +173,55 @@ display_manager::virtual_mode display_manager::main_monitor_mode()
 	return {};
 }
 
-std::optional<std::string> display_manager::add_virtual(virtual_mode, QString * error)
+std::optional<std::string> display_manager::add_virtual(virtual_mode m, QString * error)
 {
+	if (!can_create_virtual())
+	{
+		if (error)
+			*error = "virtual monitors need the Virtual Display Driver (github.com/VirtualDrivers/Virtual-Display-Driver)";
+		return std::nullopt;
+	}
+	const auto before = virtual_displays(displays());
+	if (base_count < 0)
+		base_count = int(before.size());
+	if (!vdd_command(std::format(L"SETDISPLAYCOUNT {}", before.size() + 1)))
+	{
+		if (error)
+			*error = "the Virtual Display Driver did not take the command";
+		return std::nullopt;
+	}
+	// the driver restarts with one more monitor: wait for it
+	for (int i = 0; i < 40; ++i)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		for (const auto & name: virtual_displays(displays()))
+			if (std::find(before.begin(), before.end(), name) == before.end())
+			{
+				if (!set_mode(name, m))
+					emit log(QString("[monitors] %1: %2x%3 is not in the Virtual Display Driver's resolution list, keeping its default")
+					                 .arg(QString::fromStdString(name))
+					                 .arg(m.width)
+					                 .arg(m.height));
+				added.push_back(name);
+				emit displays_changed();
+				return name;
+			}
+	}
 	if (error)
-		*error = "virtual displays are not implemented on Windows yet";
+		*error = "the Virtual Display Driver added no monitor";
 	return std::nullopt;
+}
+
+bool display_manager::remove_virtual()
+{
+	if (added.empty())
+		return false;
+	const auto now = virtual_displays(displays());
+	if (now.empty() || !vdd_command(std::format(L"SETDISPLAYCOUNT {}", now.size() - 1)))
+		return false;
+	added.pop_back(); // the driver drops its last monitor
+	emit displays_changed();
+	return true;
 }
 
 bool display_manager::set_portrait(const display_info & d, bool portrait, QString * error)

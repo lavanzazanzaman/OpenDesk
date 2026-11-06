@@ -52,6 +52,8 @@ struct engine_options
 	bool auto_select_mic = true;               // make "OpenDesk Microphone" the default input while in use
 	bool encrypt_local = false;                // EncryptLocalTraffic: AesStream on data/video/audio too
 	bool lock_on_disconnect = false;
+	bool dxvk_default = false;                 // Windows: DXVK for VR games without their own setting
+	QMap<QString, bool> dxvk_games;            // Windows: per game ("steam:<appid>" / "oculus:<id>") DXVK on/off
 	bool boost_priority = false;               // ADVANCED Boost game priority: the VR app's render thread at nice -10 (rtkit)
 	QString screenshots_dir;
 	QString videos_root;                       // MEDIA: videos folder (Videos tab library root)
@@ -117,6 +119,7 @@ private:
 	bool vr_available() const; // VR enabled and an OpenXR app has a session (HasVR)
 	void fetch_xrizer();
 	void apply_game_priority(); // "Boost game priority" for the VR app's render thread
+	void sync_dxvk();           // Windows: DXVK placed in / removed from the games' folders per the settings
 	int render_pid = 0, render_tid = 0, boosted_tid = 0, boosted_from_nice = 0;
 	void sync_vr_state();      // HasVR / StreamingSource to the headset after an app started or quit
 	void update_vr_server(); // creates/destroys the OpenXR runtime socket with the VR option; pushes display state

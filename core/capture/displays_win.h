@@ -1,4 +1,7 @@
 // Windows display enumeration and capture setup (DXGI Desktop Duplication).
+// Virtual monitors ("Add monitor", Extra display) come from the open-source Virtual Display Driver (an indirect display
+// driver, https://github.com/VirtualDrivers/Virtual-Display-Driver) when it is installed: its monitor count is changed
+// over its control pipe, and put back to what it was when the session ends.
 #pragma once
 
 #include "desktop_video.h"
@@ -32,8 +35,8 @@ public:
 	bool ready() const { return started; }
 
 	std::vector<display_info> displays();
-	bool can_create_virtual() const { return false; }
-	int virtual_count() const { return 0; }
+	bool can_create_virtual() const; // the Virtual Display Driver answers on its pipe
+	int virtual_count() const { return int(added.size()); }
 	struct virtual_mode
 	{
 		int width = 1920, height = 1080;
@@ -42,7 +45,7 @@ public:
 	};
 	virtual_mode main_monitor_mode();
 	std::optional<std::string> add_virtual(virtual_mode, QString * error);
-	bool remove_virtual() { return false; }
+	bool remove_virtual(); // the newest one
 	bool set_portrait(const display_info &, bool portrait, QString * error);
 
 	std::optional<desktop_stream_setup> open(const display_info &, QString * error);
@@ -55,5 +58,7 @@ signals:
 
 private:
 	bool started = false;
+	std::vector<std::string> added; // virtual monitors this session added (device names), oldest first
+	int base_count = -1;            // the driver's monitor count before this session changed it
 };
 } // namespace od

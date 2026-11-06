@@ -38,6 +38,7 @@ if(WIN32)
         engine/video.cpp engine/video.h engine/video_source.h
         engine/channel.cpp engine/channel.h
         engine/games.cpp engine/games.h
+        engine/dxvk_win.cpp engine/dxvk_win.h
         engine/face_tracking.cpp engine/face_tracking.h
         proto/netbuf.h
         capture/video_library.cpp capture/video_library.h
@@ -69,6 +70,9 @@ if(WIN32)
     target_link_libraries(vr-test-client PRIVATE odengine)
     add_executable(vr-server-test tests/vr_server_test.cpp)
     target_link_libraries(vr-server-test PRIVATE odengine)
+    # OpenVR runtime (xrizer) smoke test: vrclient-smoke PATH\vrclient_x64.dll
+    add_executable(vrclient-smoke tests/vrclient_smoke.cpp)
+    target_link_options(vrclient-smoke PRIVATE -static)
 
     # The other tests exercise the Linux capture stack and are not part of the Windows build.
     return()

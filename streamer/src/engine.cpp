@@ -64,6 +64,14 @@ QStringList Engine::arguments() const
 }
 
 // connected displays; Qt substitutes a nameless placeholder screen when every output is gone
+static QJsonObject dxvkGamesJson(const StreamerSettings & s)
+{
+	QJsonObject o;
+	for (auto it = s.dxvkGames.begin(); it != s.dxvkGames.end(); ++it)
+		o[it.key()] = it.value();
+	return o;
+}
+
 static int realScreens()
 {
 	int n = 0;
@@ -105,6 +113,8 @@ QJsonObject Engine::optionsJson() const
 	        {"use_stencil", s.useFovStencil},
 	        {"soft_fovea_edge", s.softFoveaEdge},
 	        {"boost_priority", s.boostGamePriority},
+	        {"dxvk_default", s.dxvkByDefault},
+	        {"dxvk_games", dxvkGamesJson(s)},
 	        {"touch", s.useTouchInput},
 	        {"mouth_sensitivity", s.mouthSensitivity},
 	        {"reported_version", s.reportedStreamerVersion},

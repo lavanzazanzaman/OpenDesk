@@ -100,6 +100,8 @@ public:
 	bool useFovStencil = true;
 	bool softFoveaEdge = false; // foveated streaming: fade the fovea into the periphery (off: the Windows streamer's edge)
 	bool boostGamePriority = false;
+	bool dxvkByDefault = false;     // Windows: run Direct3D 11 VR games on DXVK unless set per game
+	QMap<QString, bool> dxvkGames;  // Windows: per game ("steam:<appid>" / "oculus:<id>")
 	double mouthSensitivity = 2.0; // face tracking -> VRChat: mouth / jaw response (1 = raw headset weights)
 	QString reportedStreamerVersion = "1.20.3"; // compatibility: lowest Windows version the headset accepts
 

@@ -14,6 +14,7 @@
 
 #ifdef _WIN32
 #include "audio_win.h"
+#include "dxvk_win.h"
 #include "gamepad_win.h"
 #include "input_win.h"
 #include "pulse_win.h"
@@ -455,6 +456,18 @@ void native_engine::set_options(QJsonObject o)
 		options.audio_mode = o["audio_mode"].toInt();
 	if (o.contains("virtual_audio"))
 		options.virtual_audio = o["virtual_audio"].toBool();
+	if (o.contains("dxvk_default") || o.contains("dxvk_games"))
+	{
+		options.dxvk_default = o["dxvk_default"].toBool(options.dxvk_default);
+		if (o.contains("dxvk_games"))
+		{
+			options.dxvk_games.clear();
+			const QJsonObject games_o = o["dxvk_games"].toObject();
+			for (auto it = games_o.begin(); it != games_o.end(); ++it)
+				options.dxvk_games[it.key()] = it.value().toBool();
+		}
+		QMetaObject::invokeMethod(this, [this] { sync_dxvk(); }, Qt::QueuedConnection);
+	}
 	if (o.contains("boost_priority"))
 	{
 		options.boost_priority = o["boost_priority"].toBool();
@@ -1895,11 +1908,58 @@ void native_engine::send_games()
 			for (const auto & g: self->games)
 				oculus += g.platform == game_platform::oculus_rift;
 			self->info(QString("[games] %1 RiftLift, %2 Steam VR").arg(oculus).arg(self->games.size() - size_t(oculus)));
+			self->sync_dxvk();
 			self->poll_games(false); // fresh running state; the list below carries it
 			self->send_message(message_type::games, games_list(self->games, self->games_running));
 		});
 	});
 }
+
+#ifdef _WIN32
+void native_engine::sync_dxvk()
+{
+	if (games.empty())
+	{
+		if (!games_scanning && (options.dxvk_default || !options.dxvk_games.isEmpty()))
+		{
+			games_scanning = true;
+			QPointer<native_engine> self(this);
+			QThreadPool::globalInstance()->start([self] {
+				auto found = scan_games();
+				QMetaObject::invokeMethod(self, [self, found = std::move(found)]() mutable {
+					if (!self)
+						return;
+					self->games_scanning = false;
+					self->games = std::move(found);
+					self->sync_dxvk();
+				});
+			});
+		}
+		return;
+	}
+	// file copies off the engine thread; one pass over every game (placing or removing as the settings say)
+	std::vector<std::pair<game_entry, bool>> work;
+	for (const auto & g: games)
+	{
+		const bool want = dxvk::wanted(g, options.dxvk_default, options.dxvk_games);
+		work.push_back({g, want});
+	}
+	QPointer<native_engine> self(this);
+	QThreadPool::globalInstance()->start([self, work = std::move(work)] {
+		auto log = [self](QString line) {
+			QMetaObject::invokeMethod(self, [self, line] {
+				if (self)
+					self->info(line);
+			});
+		};
+		for (const auto & [g, want]: work)
+			if (want || dxvk::installed(g))
+				dxvk::apply(g, want, log);
+	});
+}
+#else
+void native_engine::sync_dxvk() {} // Linux: Proton brings DXVK
+#endif
 
 void native_engine::launch_game(game_id id)
 {
