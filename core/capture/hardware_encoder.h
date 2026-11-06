@@ -130,6 +130,7 @@ private:
 	struct d3d11_state; // desktop frames on the GPU: video processor BGRA -> NV12/P010 into D3D11 encoder frames
 	std::unique_ptr<d3d11_state> d3d;
 	bool d3d_input = false, d3d_failed = false;
+	bool rgb_input = false;       // BGRA D3D11 frames straight into NVENC (its own RGB -> YUV conversion)
 	bool eight_bit_input = false; // 10-bit codec fed NV12 (NVENC "highbitdepth"): the video processor has no P010 output
 	void setup_d3d11(const captured_frame &);
 	const uint8_t * read_texture(const captured_frame &, int & stride); // fallback: the texture on the CPU

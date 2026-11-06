@@ -365,11 +365,20 @@ struct hardware_encoder::d3d11_state
 	std::map<void *, ID3D11VideoProcessorInputView *> inputs;
 	std::map<std::pair<void *, intptr_t>, ID3D11VideoProcessorOutputView *> outputs;
 
+	bool rgb = false; // BGRA frames straight to the encoder (NVENC converts RGB itself): a copy, no video processor
+
 	d3d11_state(ID3D11Device * dev, int width, int height, AVPixelFormat sw_format, bool full_range) :
-	        device(dev)
+	        device(dev), rgb(sw_format == AV_PIX_FMT_BGRA)
 	{
 		device->AddRef();
 		device->GetImmediateContext(&context);
+		if (!rgb)
+			setup_video_processor(width, height, sw_format, full_range);
+		init_frames(width, height, sw_format);
+	}
+
+	void setup_video_processor(int width, int height, AVPixelFormat sw_format, bool full_range)
+	{
 		if (FAILED(device->QueryInterface(__uuidof(ID3D11VideoDevice), reinterpret_cast<void **>(&video))) ||
 		    FAILED(context->QueryInterface(__uuidof(ID3D11VideoContext), reinterpret_cast<void **>(&video_context))))
 			throw std::runtime_error("the capture device has no video processor");
@@ -404,6 +413,10 @@ struct hardware_encoder::d3d11_state
 			video_context->VideoProcessorSetOutputColorSpace(processor, &out);
 		}
 		video_context->VideoProcessorSetStreamAutoProcessingMode(processor, 0, FALSE);
+	}
+
+	void init_frames(int width, int height, AVPixelFormat sw_format)
+	{
 		hw_device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
 		auto * dc = static_cast<AVD3D11VADeviceContext *>(reinterpret_cast<AVHWDeviceContext *>(hw_device->data)->hwctx);
 		dc->device = device;
@@ -416,7 +429,7 @@ struct hardware_encoder::d3d11_state
 		fc->width = width;
 		fc->height = height;
 		fc->initial_pool_size = 8;
-		static_cast<AVD3D11VAFramesContext *>(fc->hwctx)->BindFlags = D3D11_BIND_RENDER_TARGET; // video processor output
+		static_cast<AVD3D11VAFramesContext *>(fc->hwctx)->BindFlags = D3D11_BIND_RENDER_TARGET; // video processor output / copy target
 		check(av_hwframe_ctx_init(frames), "D3D11 frames");
 	}
 
@@ -448,6 +461,11 @@ struct hardware_encoder::d3d11_state
 		check(av_hwframe_get_buffer(frames, out, 0), "D3D11 frame");
 		auto * target = reinterpret_cast<ID3D11Texture2D *>(out->data[0]);
 		const intptr_t slice = reinterpret_cast<intptr_t>(out->data[1]);
+		if (rgb) // the captured image into the pool texture's slice; the encoder converts it
+		{
+			context->CopySubresourceRegion(target, UINT(slice), 0, 0, 0, texture, 0, nullptr);
+			return out;
+		}
 		ID3D11VideoProcessorInputView *& in = inputs[texture];
 		if (!in)
 		{
@@ -509,7 +527,8 @@ std::string hardware_encoder::input_path() const
 	if (src_opaque)
 		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : copy_input ? "GPU copy into D3D11 frames" : "GPU readback");
 	if (d3d_input)
-		return std::format("{}, GPU (Desktop Duplication -> D3D11 video processor{})", selected, eight_bit_input ? ", NV12 -> 10-bit" : "");
+		return d3d && d3d->rgb ? std::format("{}, GPU (Desktop Duplication -> RGB into the encoder)", selected)
+		                       : std::format("{}, GPU (Desktop Duplication -> D3D11 video processor{})", selected, eight_bit_input ? ", NV12 -> 10-bit" : "");
 	if (!codec) // set up with the first frame: GPU frames unless that fails (logged then)
 		return std::format("{}, Desktop Duplication", selected);
 	return std::format("{}, CPU (Desktop Duplication readback)", selected);
@@ -559,7 +578,7 @@ void hardware_encoder::open_codec(AVPixelFormat input, AVBufferRef * frames)
 		ctx->thread_count = 1;
 		ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 		ctx->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
-		ctx->colorspace = AVCOL_SPC_BT709;
+		ctx->colorspace = rgb_input ? AVCOL_SPC_SMPTE170M : AVCOL_SPC_BT709; // NVENC converts RGB input with BT.601
 		ctx->color_primaries = AVCOL_PRI_BT709;
 		ctx->color_trc = AVCOL_TRC_BT709;
 		if (is_hevc(cfg.codec))
@@ -744,34 +763,56 @@ void hardware_encoder::setup_vr_d3d11(AVPixelFormat sw_format)
 
 void hardware_encoder::setup_d3d11(const captured_frame & f)
 {
-	AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
 	auto * device = static_cast<ID3D11Device *>(f.d3d11_device);
-	try
+	const auto gpu = win::adapter(cfg.render_node);
+	const bool nvidia = gpu && gpu->vendor == 0x10de, ten_bit = is_10bit(cfg.codec);
+	// GPU routes for the desktop's BGRA frames, best first:
+	//   1. video processor -> NV12 / P010 (BT.709, the stream's range)
+	//   2. NVIDIA, 10-bit codec: video processor -> NV12, NVENC encodes it as 10-bit ("highbitdepth"; the desktop is
+	//      8-bit anyway) - for video processors without P010 output
+	//   3. NVIDIA: BGRA straight into NVENC, which converts RGB itself - always with the BT.601 matrix, so the stream
+	//      is labelled BT.601
+	struct route
 	{
-		d3d = std::make_unique<d3d11_state>(device, cfg.width, cfg.height, dst, cfg.full_range);
-		open_codec(dst, d3d->frames);
-	}
-	catch (const std::exception & e)
+		AVPixelFormat format;
+		bool eight_bit_into_10;
+		const char * name;
+	};
+	std::vector<route> routes{{ten_bit ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12, false, ten_bit ? "P010" : "NV12"}};
+	if (nvidia && ten_bit)
+		routes.push_back({AV_PIX_FMT_NV12, true, "NV12 into NVENC's 10-bit mode"});
+	if (nvidia)
+		routes.push_back({AV_PIX_FMT_BGRA, ten_bit, "RGB into NVENC"});
+	std::string errors;
+	for (size_t i = 0; i < routes.size(); ++i)
 	{
-		// the desktop is 8-bit anyway: NVENC encodes 10-bit from NV12 ("highbitdepth") when there is no P010 path
-		const auto gpu = win::adapter(cfg.render_node);
-		if (dst != AV_PIX_FMT_P010 || !gpu || gpu->vendor != 0x10de)
-			throw;
-		note(std::string("[encoder] P010 desktop frames unavailable (") + e.what() + "): NV12 into NVENC's 10-bit mode");
-		avcodec_free_context(&codec);
-		d3d.reset();
-		dst = AV_PIX_FMT_NV12;
-		eight_bit_input = true;
-		d3d = std::make_unique<d3d11_state>(device, cfg.width, cfg.height, dst, cfg.full_range);
-		open_codec(dst, d3d->frames);
+		const route & r = routes[i];
+		try
+		{
+			eight_bit_input = r.eight_bit_into_10;
+			rgb_input = r.format == AV_PIX_FMT_BGRA;
+			d3d = std::make_unique<d3d11_state>(device, cfg.width, cfg.height, r.format, cfg.full_range);
+			open_codec(r.format, d3d->frames);
+			if (i > 0)
+				note(std::format("[encoder] desktop frames on the GPU as {} ({})", r.name, errors));
+			d3d_input = true;
+			src_opaque = false;
+			src_format = AV_PIX_FMT_BGRA;
+			src_width = cfg.width;
+			src_height = cfg.height;
+			src_stride = 0;
+			pts = 0;
+			return;
+		}
+		catch (const std::exception & e)
+		{
+			errors += std::format("{}{}: {}", errors.empty() ? "" : "; ", r.name, e.what());
+			avcodec_free_context(&codec);
+			d3d.reset();
+			eight_bit_input = rgb_input = false;
+		}
 	}
-	d3d_input = true;
-	src_opaque = false;
-	src_format = AV_PIX_FMT_BGRA;
-	src_width = cfg.width;
-	src_height = cfg.height;
-	src_stride = 0;
-	pts = 0;
+	throw std::runtime_error(errors);
 }
 
 // the capture texture on the CPU (staging copy + map), for encoders that can't take D3D11 frames
