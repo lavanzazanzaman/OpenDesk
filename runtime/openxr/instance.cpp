@@ -617,6 +617,9 @@ namespace opendesk_openxr {
             {XR_OCULUS_AUDIO_DEVICE_GUID_EXTENSION_NAME, XR_OCULUS_audio_device_guid_SPEC_VERSION});
 #endif
 
+        m_extensionsTable.push_back( // Layer alpha (xrizer: OpenVR overlay fades, loading screens).
+            {XR_KHR_COMPOSITION_LAYER_COLOR_SCALE_BIAS_EXTENSION_NAME, XR_KHR_composition_layer_color_scale_bias_SPEC_VERSION});
+
 #ifdef HAS_CYLINDER_LAYERS
         m_extensionsTable.push_back( // Cylinder layers.
             {XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME, XR_KHR_composition_layer_cylinder_SPEC_VERSION});

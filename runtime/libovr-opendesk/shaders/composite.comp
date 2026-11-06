@@ -134,6 +134,23 @@ void main()
 		return;
 	}
 	if (pc.info.x == 5) {
+		// "Use Fov Stencil" (effects.y: its margin, 0 off): games may leave the hidden area unrendered - stale
+		// pixels (a loading screen, the last scene) - so it is black in the stream, the shape ovr_GetFovStencil gives
+		if (pc.effects.y > 0.0)
+		{
+			vec2 eye = vec2(pc.info.w & 0xffff, (pc.info.w >> 16) & 0xffff);
+			vec2 t = (vec2(p) + 0.5) / vec2(size);
+			vec2 s = pc.info.w != 0 ? (pc.effects.zw + vec2(p) + 0.5) / eye : vec2(unwarp(t.x), unwarp(t.y));
+			vec2 tan_xy = vec2(mix(-pc.fov_out.x, pc.fov_out.y, s.x), mix(pc.fov_out.z, -pc.fov_out.w, s.y));
+			// the ellipse is the one inside the game's FOV (a: left, right, up, down - cropped by the FOV settings)
+			vec2 semi = vec2(atan(tan_xy.x >= 0.0 ? pc.a.y : pc.a.x), atan(tan_xy.y >= 0.0 ? pc.a.z : pc.a.w)) * pc.effects.y;
+			vec2 q = atan(tan_xy) / semi;
+			if (dot(q, q) > 1.0)
+			{
+				imageStore(stream_image, p, uvec4(0xff000000u));
+				return;
+			}
+		}
 		uint prev = imageLoad(stream_image, p).x;
 		// output gamma (effects.x: the exponent, applied to linear light - the Windows streamer's pow(c, 0.9 / Gamma))
 		vec3 c = from_srgb(vec3((prev >> 16) & 255u, (prev >> 8) & 255u, prev & 255u) / 255.0);
@@ -250,6 +267,10 @@ void main()
 	if ((pc.info.y & 8) != 0 && inside)
 		src.a = 1.0;
 	src.a *= alpha_scale;
+	float layer_alpha = 1.0 - float((pc.info.y >> 8) & 255) / 255.0; // the layer's alpha (color scale)
+	src.a *= layer_alpha;
+	if ((pc.info.y & 4) != 0) // premultiplied: the colour fades with it
+		src.rgb *= layer_alpha;
 
 	vec3 color;
 	if ((pc.info.y & 2) != 0) // first layer: opaque base

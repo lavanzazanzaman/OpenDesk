@@ -21,6 +21,7 @@ extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -380,6 +381,10 @@ struct hardware_encoder::d3d11_state
 		cd.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 		if (FAILED(video->CreateVideoProcessorEnumerator(&cd, &enumerator)) || FAILED(video->CreateVideoProcessor(enumerator, 0, &processor)))
 			throw std::runtime_error("cannot create a D3D11 video processor");
+		const DXGI_FORMAT out_format = sw_format == AV_PIX_FMT_P010 ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+		UINT support = 0;
+		if (FAILED(enumerator->CheckVideoProcessorFormat(out_format, &support)) || !(support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT))
+			throw std::runtime_error(std::format("the video processor cannot output {}", av_get_pix_fmt_name(sw_format)));
 		// RGB (full range) in, BT.709 YCbCr in the stream's range out
 		ID3D11VideoContext1 * vc1 = nullptr;
 		if (SUCCEEDED(video_context->QueryInterface(__uuidof(ID3D11VideoContext1), reinterpret_cast<void **>(&vc1))))
@@ -504,7 +509,7 @@ std::string hardware_encoder::input_path() const
 	if (src_opaque)
 		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : copy_input ? "GPU copy into D3D11 frames" : "GPU readback");
 	if (d3d_input)
-		return std::format("{}, GPU (Desktop Duplication -> D3D11 video processor)", selected);
+		return std::format("{}, GPU (Desktop Duplication -> D3D11 video processor{})", selected, eight_bit_input ? ", NV12 -> 10-bit" : "");
 	if (!codec) // set up with the first frame: GPU frames unless that fails (logged then)
 		return std::format("{}, Desktop Duplication", selected);
 	return std::format("{}, CPU (Desktop Duplication readback)", selected);
@@ -564,6 +569,8 @@ void hardware_encoder::open_codec(AVPixelFormat input, AVBufferRef * frames)
 		else
 			ctx->profile = AV_PROFILE_H264_HIGH;
 		tune(ctx, c.name, cfg);
+		if (eight_bit_input)
+			set_option(ctx, "highbitdepth", "1"); // NVENC: 10-bit encode of 8-bit input
 		const int err = avcodec_open2(ctx, def, nullptr);
 		if (err < 0)
 		{
@@ -737,9 +744,27 @@ void hardware_encoder::setup_vr_d3d11(AVPixelFormat sw_format)
 
 void hardware_encoder::setup_d3d11(const captured_frame & f)
 {
-	const AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
-	d3d = std::make_unique<d3d11_state>(static_cast<ID3D11Device *>(f.d3d11_device), cfg.width, cfg.height, dst, cfg.full_range);
-	open_codec(dst, d3d->frames);
+	AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+	auto * device = static_cast<ID3D11Device *>(f.d3d11_device);
+	try
+	{
+		d3d = std::make_unique<d3d11_state>(device, cfg.width, cfg.height, dst, cfg.full_range);
+		open_codec(dst, d3d->frames);
+	}
+	catch (const std::exception & e)
+	{
+		// the desktop is 8-bit anyway: NVENC encodes 10-bit from NV12 ("highbitdepth") when there is no P010 path
+		const auto gpu = win::adapter(cfg.render_node);
+		if (dst != AV_PIX_FMT_P010 || !gpu || gpu->vendor != 0x10de)
+			throw;
+		note(std::string("[encoder] P010 desktop frames unavailable (") + e.what() + "): NV12 into NVENC's 10-bit mode");
+		avcodec_free_context(&codec);
+		d3d.reset();
+		dst = AV_PIX_FMT_NV12;
+		eight_bit_input = true;
+		d3d = std::make_unique<d3d11_state>(device, cfg.width, cfg.height, dst, cfg.full_range);
+		open_codec(dst, d3d->frames);
+	}
 	d3d_input = true;
 	src_opaque = false;
 	src_format = AV_PIX_FMT_BGRA;

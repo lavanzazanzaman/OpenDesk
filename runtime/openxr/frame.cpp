@@ -525,6 +525,19 @@ namespace opendesk_openxr {
                 } else {
                     return XR_ERROR_LAYER_INVALID;
                 }
+
+                // XR_KHR_composition_layer_color_scale_bias: the layer's alpha scale for libovr-opendesk's compositor
+                // (Header.Reserved[3] = 1 marks it, the float in Reserved[4..7]). OpenVR games fade overlays such as
+                // loading screens out this way (xrizer's SetOverlayAlpha); colour scale and bias are not applied.
+                for (auto* entry = reinterpret_cast<const XrBaseInStructure*>(frameEndInfo->layers[i]->next); entry;
+                     entry = entry->next) {
+                    if (entry->type == XR_TYPE_COMPOSITION_LAYER_COLOR_SCALE_BIAS_KHR) {
+                        const float alpha = std::clamp(
+                            reinterpret_cast<const XrCompositionLayerColorScaleBiasKHR*>(entry)->colorScale.a, 0.f, 1.f);
+                        layer.Header.Reserved[3] = 1;
+                        std::memcpy(&layer.Header.Reserved[4], &alpha, sizeof(alpha));
+                    }
+                }
             }
 
             // Mark all swapchain images as clean (aka already pre-processed).

@@ -519,7 +519,7 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 		float y = (U - ty) / (U + D);
 		return ovrVector2f{(tx + L) / (L + R), flip ? 1.f - y : y};
 	};
-	constexpr float margin = 1.05f;
+	constexpr float margin = od::ovr::fov_stencil_margin;
 	constexpr int n = 64;                // ring points
 	constexpr float pi = 3.14159265358979f;
 	auto ellipse = [&](float phi) { // viewing angles per side, then back to tangents
@@ -1263,6 +1263,13 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 		// alpha mode in Header.Reserved[2] (OpenDesk XR port): bit 0 opaque, bit 1 unpremultiplied
 		l.opaque = h->Reserved[2] & 1;
 		l.premultiplied = !(h->Reserved[2] & 2);
+		// layer alpha (XR_KHR_composition_layer_color_scale_bias, OpenDesk XR port): Reserved[3] = 1, float in [4..7]
+		if (h->Reserved[3] == 1)
+		{
+			std::memcpy(&l.alpha, &h->Reserved[4], sizeof(l.alpha));
+			if (!(l.alpha > 0.f)) // faded out (an OpenVR loading screen after loading): not drawn at all
+				continue;
+		}
 		if (h->Type == ovrLayerType_EyeFov || h->Type == ovrLayerType_EyeFovDepth)
 		{
 			auto * p = reinterpret_cast<const ovrLayerEyeFov *>(h);

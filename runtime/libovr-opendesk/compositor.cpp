@@ -1296,6 +1296,8 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 			pc.info[0] = int(l.type) + 1;
 			pc.info[2] = l.cube_face;
 			pc.info[1] = (l.origin_bottom_left ? 1 : 0) | (first ? 2 : 0) | (l.premultiplied ? 4 : 0) | (l.opaque ? 8 : 0);
+			// layer alpha in bits 8-15 as transparency (0: fully opaque, the default)
+			pc.info[1] |= int(std::lround((1.f - std::clamp(l.alpha, 0.f, 1.f)) * 255.f)) << 8;
 			std::memcpy(pc.fov_out, stream_fov[eye], sizeof(pc.fov_out));
 			std::memcpy(pc.rect, l.rect[eye], sizeof(pc.rect));
 			if (l.type == composite_layer::projection)
@@ -1350,6 +1352,13 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 		{
 			clear.info[0] = 5;
 			clear.effects[0] = 0.9f / std::max(state.settings.gamma, 0.1f);
+			clear.effects[1] = state.settings.use_stencil ? fov_stencil_margin : 0.f; // the hidden area black
+			const float h = state.settings.horizontal_fov > 0 ? state.settings.horizontal_fov : 1.f,
+			            v = state.settings.vertical_fov > 0 ? state.settings.vertical_fov : 1.f;
+			clear.a[0] = stream_fov[eye][0] * h; // the games' FOV (what the stencil was computed for)
+			clear.a[1] = stream_fov[eye][1] * h;
+			clear.a[2] = stream_fov[eye][2] * v;
+			clear.a[3] = stream_fov[eye][3] * v;
 			dispatch(target, black_view, clear);
 		}
 	}

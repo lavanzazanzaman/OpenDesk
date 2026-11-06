@@ -37,6 +37,10 @@ namespace od::ovr
 {
 void report(const char * fmt, ...); // stderr + the streamer's log (ovr_vd.cpp)
 
+// "Use Fov Stencil": the lens-shaped ellipse (in viewing angle, inscribed in the eye's FOV) grown by this factor; outside
+// it is the hidden area games may skip (ovr_GetFovStencil) and the compositor sends black
+constexpr float fov_stencil_margin = 1.05f;
+
 struct swapchain
 {
 	VkFormat format = VK_FORMAT_UNDEFINED;
@@ -81,6 +85,7 @@ struct composite_layer
 	bool head_locked = false;
 	bool origin_bottom_left = false;
 	bool premultiplied = true; // OpenXR default
+	float alpha = 1.f; // the layer's alpha scale (XR_KHR_composition_layer_color_scale_bias)
 	bool opaque = false;        // ignore the source alpha
 	uint32_t eye_mask = 3; // bit 0 left, bit 1 right
 };
