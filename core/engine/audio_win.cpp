@@ -145,7 +145,85 @@ std::wstring mic_device_name()
 	MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, wide.data(), n);
 	return wide;
 }
+
+// IPolicyConfig (Windows 7+): the interface the Sound control panel sets default devices with. Undocumented but
+// stable; only SetDefaultEndpoint is used, the slots before it keep the vtable layout.
+struct IPolicyConfig : IUnknown
+{
+	virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR, WAVEFORMATEX **) = 0;
+	virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR, INT, WAVEFORMATEX **) = 0;
+	virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR, WAVEFORMATEX *, WAVEFORMATEX *) = 0;
+	virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR, INT, PINT64, PINT64) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR, PINT64) = 0;
+	virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR, void *) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR, void *) = 0;
+	virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR, const PROPERTYKEY &, PROPVARIANT *) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR, const PROPERTYKEY &, PROPVARIANT *) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR, ERole) = 0;
+	virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR, INT) = 0;
+};
+constexpr IID iid_policy_config = {0xf8679f50, 0x850a, 0x41cf, {0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02, 0x90, 0xc8}};
+constexpr CLSID clsid_policy_config = {0x870af99c, 0x171d, 0x4f9e, {0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9}};
+
+bool set_default_endpoint(const std::wstring & id)
+{
+	ComPtr<IPolicyConfig> policy;
+	if (id.empty() || FAILED(CoCreateInstance(clsid_policy_config, nullptr, CLSCTX_ALL, iid_policy_config,
+	                                          reinterpret_cast<void **>(policy.GetAddressOf()))))
+		return false;
+	bool ok = true;
+	for (ERole role: {eConsole, eMultimedia, eCommunications})
+		ok = SUCCEEDED(policy->SetDefaultEndpoint(id.c_str(), role)) && ok;
+	return ok;
+}
+
+std::wstring endpoint_id(IMMDevice * device)
+{
+	std::wstring id;
+	LPWSTR raw = nullptr;
+	if (device && SUCCEEDED(device->GetId(&raw)))
+		id = raw;
+	CoTaskMemFree(raw);
+	return id;
+}
+
+struct com_scope
+{
+	bool ok = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+	~com_scope()
+	{
+		if (ok)
+			CoUninitialize();
+	}
+};
 } // namespace
+
+std::string select_virtual_mic()
+{
+	com_scope com;
+	ComPtr<IMMDeviceEnumerator> enumerator;
+	if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator))))
+		return {};
+	// the cable's recording side: "CABLE Input" (where the headset mic is played) -> "CABLE Output"
+	std::wstring wanted = mic_device_name();
+	if (const size_t at = wanted.find(L"Input"); at != std::wstring::npos)
+		wanted.replace(at, 5, L"Output");
+	ComPtr<IMMDevice> cable = named_device(enumerator.Get(), eCapture, wanted, false);
+	ComPtr<IMMDevice> current = default_device(enumerator.Get(), eCapture);
+	const std::wstring cable_id = endpoint_id(cable.Get()), previous = endpoint_id(current.Get());
+	if (cable_id.empty() || cable_id == previous || !set_default_endpoint(cable_id))
+		return {};
+	return previous.empty() ? std::string("-") : std::string(previous.begin(), previous.end()); // endpoint ids are ASCII
+}
+
+void restore_default_mic(const std::string & previous)
+{
+	if (previous.empty() || previous == "-")
+		return;
+	com_scope com;
+	set_default_endpoint(std::wstring(previous.begin(), previous.end()));
+}
 
 std::string virtual_mic_device()
 {

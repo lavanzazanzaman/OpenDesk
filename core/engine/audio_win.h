@@ -21,6 +21,9 @@ namespace od
 bool send_all(int fd, const void * data, size_t size);
 bool virtual_mic_available();     // the virtual cable the headset microphone is played into exists
 std::string virtual_mic_device(); // its name
+// "CABLE Output" made the default recording device (every role); returns what to restore, empty when nothing changed
+std::string select_virtual_mic();
+void restore_default_mic(const std::string & previous);
 
 class desktop_audio_sender
 {

@@ -218,6 +218,9 @@ struct native_engine::session
 	void undo_mic()
 	{
 		mic.reset();
+#ifdef _WIN32
+		restore_default_mic(std::exchange(restore_source, {}));
+#endif
 		if (!pulse)
 			return;
 		if (!restore_source.empty())
@@ -2541,7 +2544,13 @@ void native_engine::on_mic_packet(session * sess, const uint8_t * pcm, size_t si
 #ifdef _WIN32
 		const QString cable = QString::fromStdString(virtual_mic_device());
 		if (virtual_mic_available())
-			info(QString("[audio] headset mic -> '%1' (apps record it from the cable's output, e.g. 'CABLE Output')").arg(cable));
+		{
+			if (options.auto_select_mic)
+				sess->restore_source = select_virtual_mic();
+			info(QString("[audio] headset mic -> '%1'%2").arg(cable, !sess->restore_source.empty()
+			                                                                ? " ('CABLE Output' selected as the default microphone)"
+			                                                                : " (apps record it from 'CABLE Output')"));
+		}
 		else
 			info(QString("[audio] headset mic not forwarded: no '%1' device. Windows needs a virtual audio cable for this - "
 			             "install VB-CABLE (vb-audio.com/Cable), then choose 'CABLE Output' as the microphone in your apps")
