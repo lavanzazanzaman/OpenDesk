@@ -44,22 +44,19 @@ details.
 
 ## Version compatibility
 
-The headset refuses a streamer whose minor version is newer than its own, and
-asks older streamers to update. OpenDesk advertises **1.20.3** by default: the
-lowest version the current headset app accepts, which means every headset app
-from 1.20.3 onward can connect. The headset's update prompt is declined
-automatically.
+The headset app refuses a streamer whose minor version is newer than its own, and asks older streamers to update.
+Headset apps from **1.34.25** send their own version when they search for computers; by default (**Automatic**,
+Advanced tab) OpenDesk reports exactly that version back, so the headset neither refuses the PC nor asks for an update,
+and gets every feature it supports. Older headset apps don't send a version and get **1.20.3**, the lowest version the
+headset app accepts (every app from 1.20.3 onward connects).
 
-Newer headset features (eye-tracked foveated streaming, stream restart) need a
-newer advertised version. Set `Reported Streamer Version` on the **Advanced**
-tab, or launch with:
+Uncheck Automatic to always report the version in **Reported Streamer Version**, or launch with:
 
 ```
 OPENDESK_STREAMER_VERSION=1.34.23 opendesk-streamer
 ```
 
-`1.34.23` is the newest version known to work. The setting takes effect on the
-next connection.
+The setting takes effect on the next connection. The headset's update prompt is declined automatically.
 
 ## Build
 

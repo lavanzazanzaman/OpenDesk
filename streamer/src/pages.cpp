@@ -573,9 +573,18 @@ QWidget * makeAdvancedPage(Engine & engine)
 
 	v->addWidget(section("Reported Streamer Version (compatibility)", 10));
 	auto * reported = new QLineEdit(s.reportedStreamerVersion);
+	v->addWidget(check("Automatic (match the headset app)", s.reportedVersionAuto,
+	                   "Headset apps from 1.34.25 tell the streamer their version: it is reported back, so the headset neither\n"
+	                   "refuses the PC nor asks to update it, and gets every feature it supports. Older headset apps get the\n"
+	                   "version below. Uncheck to always report the version below",
+	                   true, [&engine, reported] {
+		                   reported->setEnabled(!StreamerSettings::instance().reportedVersionAuto);
+		                   engine.applyOptions();
+	                   }));
+	reported->setEnabled(!s.reportedVersionAuto);
 	reported->setMaximumWidth(160);
 	reported->setPlaceholderText("1.20.3");
-	reported->setToolTip("The version this streamer advertises to the headset app.\n"
+	reported->setToolTip("The version this streamer advertises to the headset app (with Automatic: to apps older than 1.34.25).\n"
 	                     "The headset refuses a streamer with a higher minor version, so 1.20.3 connects to every\n"
 	                     "headset app from 1.20.3 onward. 1.34.23 unlocks eye-tracked foveated streaming and stream\n"
 	                     "restart on current headsets. Takes effect on the next connection.");

@@ -66,6 +66,8 @@ struct engine_options
 	int virtual_width = 0, virtual_height = 0; // Add monitor / Extra display size override (0 = like the main monitor)
 	int probe_bytes = 5000000;                 // Windows: 5 MB with AutoAdjustBitrate, none without
 	std::array<int, 4> reported_version = default_streamer_version; // discovery/compatibility version
+	// "auto": headset apps that send their version (1.34.25+) get it reported back; older ones get reported_version
+	bool auto_version = true;
 };
 
 class native_engine : public QObject
@@ -171,6 +173,7 @@ private:
 	qint64 vr_wait_until_ms = 0; // a game launched from the headset: its first frame expected until then
 	bool game_launch_pending() const;
 	bool runtime_registered = false, runtime_pending_logged = false;
+	QSet<QString> unreadable_discovery; // hosts whose discovery requests this streamer couldn't parse (logged once)
 	bool openvr_registered = false, openvr_warned = false, xrizer_fetch_started = false;
 	float vr_haptics[2] = {0, 0};
 	std::vector<game_entry> games;             // last scan

@@ -104,6 +104,7 @@ public:
 	QMap<QString, bool> dxvkGames;  // Windows: per game ("steam:<appid>" / "oculus:<id>")
 	double mouthSensitivity = 2.0; // face tracking -> VRChat: mouth / jaw response (1 = raw headset weights)
 	QString reportedStreamerVersion = "1.20.3"; // compatibility: lowest Windows version the headset accepts
+	bool reportedVersionAuto = true; // headset apps 1.34.25+ send their version: report it back (older: the version above)
 
 	// MEDIA
 	QString screenshotsRootPath;

@@ -178,12 +178,21 @@ std::string computer_info::to_xml() const
 
 std::optional<discovery_request> parse_discovery_request(const uint8_t * data, size_t size)
 {
-	// client writes 4 AesStream chunks: RSA key XML, byte 0, byte platform, AccountID
+	// one AesStream chunk per write:
+	//   up to 1.34.24: RSA key XML, byte 0, byte platform, AccountID
+	//   from 1.34.25:  RSA key XML, byte 1, account signature (absent before the headset got one), byte minor, byte build,
+	//                  byte platform, AccountID - read from the end, whatever the signature's length
 	auto chunks = aes_stream_decode_chunks(broadcast_key, broadcast_iv, data, size);
-	if (!chunks || chunks->size() < 4 || (*chunks)[2].size() != 1)
+	if (!chunks || chunks->size() < 4 || (*chunks)[1].size() != 1)
 		return std::nullopt;
 	auto & c = *chunks;
-	return discovery_request{std::string(c[0].begin(), c[0].end()), c[2][0], std::string(c[3].begin(), c[3].end())};
+	const size_t n = c.size();
+	auto text = [](const bytes & b) { return std::string(b.begin(), b.end()); };
+	if (c[1][0] == 0 && c[2].size() == 1)
+		return discovery_request{text(c[0]), c[2][0], text(c[3]), std::nullopt};
+	if (c[1][0] == 1 && n >= 6 && c[n - 2].size() == 1 && c[n - 3].size() == 1 && c[n - 4].size() == 1)
+		return discovery_request{text(c[0]), c[n - 2][0], text(c[n - 1]), std::array<int, 4>{1, c[n - 4][0], c[n - 3][0], 0}};
+	return std::nullopt;
 }
 
 std::optional<bytes> build_discovery_reply(const discovery_request & req, const computer_info & computer)

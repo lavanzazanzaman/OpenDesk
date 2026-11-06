@@ -2,6 +2,8 @@
 // Reference implementation: engine/odproto.py (verified against a Quest 3).
 #pragma once
 
+#include <optional>
+
 #include "crypto.h"
 
 #include <string>
@@ -132,6 +134,9 @@ struct discovery_request
 	std::string rsa_xml;
 	int platform;
 	std::string account_id;
+	// headset apps from 1.34.25 send their own version (and an account signature) in the request: 1.minor.build.0;
+	// older ones don't
+	std::optional<std::array<int, 4>> app_version;
 };
 std::optional<discovery_request> parse_discovery_request(const uint8_t * data, size_t size);
 // RSA-OAEP-SHA1(replyKey32 + replyIV16) [128 B] + AesStream(replyKey, replyIV, Computer XML)

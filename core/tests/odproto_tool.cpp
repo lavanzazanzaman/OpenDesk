@@ -1,7 +1,7 @@
 // Test CLI exposing the C++ protocol primitives over hex, driven by crosscheck.py against the Python reference.
 //   aes-encode KEY IV            stdin: one payload hex per line -> one ciphertext chunk hex per line (one CBC chain)
 //   aes-decode KEY IV CHUNKSIZE  stdin: ciphertext hex -> plaintext hex (fed in CHUNKSIZE pieces)
-//   parse-request                stdin: datagram hex -> "platform account"
+//   parse-request                stdin: datagram hex -> "platform account [app version]"
 //   discovery-reply              stdin: request hex -> reply hex (fixed test computer)
 //   computer-xml                 -> XML of the fixed test computer
 #include "protocol.h"
@@ -64,7 +64,10 @@ int main(int argc, char ** argv)
 		auto req = parse_discovery_request(d.data(), d.size());
 		if (!req)
 			return 1;
-		std::cout << req->platform << " " << req->account_id << "\n";
+		std::cout << req->platform << " " << req->account_id;
+		if (req->app_version) // headset apps from 1.34.25
+			std::cout << " " << version_string(*req->app_version);
+		std::cout << "\n";
 	}
 	else if (cmd == "discovery-reply")
 	{

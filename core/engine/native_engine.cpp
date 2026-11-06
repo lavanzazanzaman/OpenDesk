@@ -335,9 +335,12 @@ void native_engine::emit_event(const char * name, QJsonObject fields)
 void native_engine::start(QStringList accounts_, QJsonObject options_)
 {
 	set_accounts(accounts_);
-	if (qEnvironmentVariableIsSet("OPENDESK_STREAMER_VERSION"))
-		options.reported_version = parse_streamer_version(qgetenv("OPENDESK_STREAMER_VERSION").toStdString());
 	set_options(options_);
+	if (qEnvironmentVariableIsSet("OPENDESK_STREAMER_VERSION")) // after the GUI's options: an explicit version wins
+	{
+		options.reported_version = parse_streamer_version(qgetenv("OPENDESK_STREAMER_VERSION").toStdString());
+		options.auto_version = false;
+	}
 	computer.version = options.reported_version;
 	// face/eye tracking to VRChat: always on (sends only while VRChat runs and the headset has the data)
 	face = std::make_unique<face_tracking>([this](const std::string & line) { info(QString::fromStdString(line)); });
@@ -424,6 +427,7 @@ void native_engine::set_options(QJsonObject o)
 {
 	if (o.contains("reported_version"))
 	{
+		options.auto_version = o["reported_version"].toString().compare("auto", Qt::CaseInsensitive) == 0;
 		options.reported_version = parse_streamer_version(o["reported_version"].toString().toStdString());
 		computer.version = options.reported_version;
 	}
@@ -580,7 +584,16 @@ void native_engine::on_discovery(QUdpSocket * socket)
 			continue;
 		auto req = parse_discovery_request(p, d.size());
 		if (!req)
+		{
+			// a headset app with a request format this streamer doesn't know: say so once (it can't find the PC)
+			if (!unreadable_discovery.contains(host))
+			{
+				unreadable_discovery.insert(host);
+				info(QString("discovery from %1 not understood (%2 bytes) - a newer headset app than this streamer knows? "
+				             "The headset won't find this PC").arg(host).arg(d.size()));
+			}
 			continue;
+		}
 		QString account = QString::fromStdString(req->account_id);
 		if (!accounts.contains(account))
 		{
@@ -589,11 +602,17 @@ void native_engine::on_discovery(QUdpSocket * socket)
 			continue;
 		}
 		computer.adapters = local_adapters(); // USB link-local appears once the headset brings the link up
+		// Automatic: the headset app's own version when it sends one (never refused, no update prompt); else the
+		// configured / compatibility version every app accepts
+		computer.version = options.auto_version && req->app_version ? *req->app_version : options.reported_version;
 		auto reply = build_discovery_reply(*req, computer);
 		if (!reply)
 			continue;
 		socket->writeDatagram(reinterpret_cast<const char *>(reply->data()), qint64(reply->size()), dg.senderAddress(), dg.senderPort());
-		info(QString("discovery reply -> %1 (account '%2', %3 bytes)").arg(host, account).arg(reply->size()));
+		info(QString("discovery reply -> %1 (account '%2', headset app %3, reporting %4)")
+		             .arg(host, account,
+		                  req->app_version ? QString::fromStdString(version_string(*req->app_version)) : QString("older than 1.34.25"),
+		                  QString::fromStdString(version_string(computer.version))));
 	}
 }
 

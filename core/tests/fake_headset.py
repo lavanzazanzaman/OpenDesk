@@ -81,7 +81,14 @@ nums = priv.public_key().public_numbers()
 b64 = lambda n: base64.b64encode(n.to_bytes((n.bit_length() + 7) // 8, "big")).decode()  # noqa: E731
 rsa_xml = f"<RSAKeyValue><Modulus>{b64(nums.n)}</Modulus><Exponent>{b64(nums.e)}</Exponent></RSAKeyValue>"
 w = od.AesStreamWriter(od.BROADCAST_KEY, od.BROADCAST_IV)
-request = w.encode(rsa_xml.encode()) + w.encode(b"\0") + w.encode(bytes([1])) + w.encode(ACCOUNT.encode())
+# FAKE_HEADSET_APP_VERSION=1.34.25: the request of headset apps from 1.34.25 (account signature + their own version)
+APP_VERSION = __import__("os").environ.get("FAKE_HEADSET_APP_VERSION")
+if APP_VERSION:
+    _, minor, build = (int(x) for x in APP_VERSION.split(".")[:3])
+    request = (w.encode(rsa_xml.encode()) + w.encode(b"\1") + w.encode(bytes(range(64))) + w.encode(bytes([minor]))
+               + w.encode(bytes([build])) + w.encode(bytes([1])) + w.encode(ACCOUNT.encode()))
+else:
+    request = w.encode(rsa_xml.encode()) + w.encode(b"\0") + w.encode(bytes([1])) + w.encode(ACCOUNT.encode())
 
 udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 udp.settimeout(3)
@@ -100,6 +107,11 @@ field = lambda tag: re.search(f"<{tag}>([^<]*)</{tag}>", xml).group(1)  # noqa: 
 conn_id, key, iv = (base64.b64decode(field(t)) for t in ("ConnectionID", "Key", "IV"))
 step("Computer XML decrypted", len(conn_id) == 16 and len(key) == 32 and len(iv) == 16, xml[:200])
 print(f"      computer '{field('Name')}' ({field('Description')})")
+_v = lambda part: re.search(rf"<(?:\w+:)?_{part}>(\d+)<", xml).group(1)  # noqa: E731
+reported = f"{_v('Major')}.{_v('Minor')}.{_v('Build')}"
+print(f"      reported streamer version: {reported}")
+if APP_VERSION:
+    step("streamer reports the headset app's version back", reported.startswith(APP_VERSION), reported)
 encrypted = field("EncryptLocalTraffic") == "true"
 print(f"      EncryptLocalTraffic={encrypted}")
 

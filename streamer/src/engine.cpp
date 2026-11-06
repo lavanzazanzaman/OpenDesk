@@ -117,7 +117,7 @@ QJsonObject Engine::optionsJson() const
 	        {"dxvk_games", dxvkGamesJson(s)},
 	        {"touch", s.useTouchInput},
 	        {"mouth_sensitivity", s.mouthSensitivity},
-	        {"reported_version", s.reportedStreamerVersion},
+	        {"reported_version", s.reportedVersionAuto ? QString("auto") : s.reportedStreamerVersion},
 	        {"screens", realScreens()},
 	        {"desktop_width", desktop.width()},
 	        {"desktop_height", desktop.height()}};

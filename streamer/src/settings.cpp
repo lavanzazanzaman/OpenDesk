@@ -127,6 +127,7 @@ void StreamerSettings::resetAdvanced()
 	dxvkGames.clear();
 	mouthSensitivity = 2.0;
 	reportedStreamerVersion = "1.20.3";
+	reportedVersionAuto = true;
 	save();
 }
 
@@ -193,6 +194,7 @@ void StreamerSettings::load()
 	}
 	d("MouthSensitivity", mouthSensitivity);
 	s("ReportedStreamerVersion", reportedStreamerVersion);
+	b("ReportedVersionAuto", reportedVersionAuto);
 	if (reportedStreamerVersion.isEmpty())
 		reportedStreamerVersion = "1.20.3";
 	s("ScreenshotsRootPath", screenshotsRootPath);
@@ -252,6 +254,7 @@ void StreamerSettings::save()
 	}
 	o["MouthSensitivity"] = mouthSensitivity;
 	o["ReportedStreamerVersion"] = reportedStreamerVersion;
+	o["ReportedVersionAuto"] = reportedVersionAuto;
 
 	o["ScreenshotsRootPath"] = screenshotsRootPath;
 	o["VideosRootPath"] = videosRootPath;
