@@ -1,3 +1,4 @@
+#ifndef _WIN32 // the Windows transport is in vr_client_win.cpp
 #include "vr_client.h"
 
 #include <cerrno>
@@ -248,3 +249,4 @@ void vr_client::announce_rendering()
 	send(fd, &r, sizeof(r), MSG_NOSIGNAL);
 }
 } // namespace od
+#endif

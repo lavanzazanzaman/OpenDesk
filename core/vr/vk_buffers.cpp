@@ -1,20 +1,44 @@
 #include "vk_buffers.h"
 #include "vr_ipc.h"
 
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <map>
 #include <stdexcept>
+#include <vector>
+#ifdef _WIN32
+#include "win_gpu.h"
+#include <windows.h>
+#define VK_USE_PLATFORM_WIN32_KHR
+#include <vulkan/vulkan.h>
+#else
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
-#include <vector>
 #include <vulkan/vulkan.h>
+#endif
 
 namespace od
 {
+#ifdef _WIN32
+uint64_t dmabuf_image::next_id() // dmabuf.cpp on Linux
+{
+	static std::atomic<uint64_t> id{1};
+	return id++;
+}
+#endif
+
 namespace
 {
+#ifdef _WIN32
+constexpr auto external_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+constexpr const char * external_memory_extension = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
+#else
+constexpr auto external_handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+constexpr const char * external_memory_extension = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME;
+#endif
+
 void check(VkResult r, const char * what)
 {
 	if (r != VK_SUCCESS)
@@ -32,7 +56,7 @@ uint32_t memory_type(const VkPhysicalDeviceMemoryProperties & props, uint32_t bi
 	throw std::runtime_error("no Vulkan memory type for the VR buffers");
 }
 
-// an instance + device on the GPU behind a DRM render node, with external memory fd support
+// an instance + device on the GPU behind a DRM render node (Windows: a DXGI adapter LUID), with external memory support
 struct gpu
 {
 	VkInstance instance = VK_NULL_HANDLE;
@@ -42,13 +66,21 @@ struct gpu
 	uint32_t family = 0;
 	VkPhysicalDeviceMemoryProperties memory{};
 	std::array<uint8_t, 16> device_uuid{}, driver_uuid{};
+#ifdef _WIN32
+	PFN_vkGetMemoryWin32HandleKHR get_handle = nullptr;
+#else
 	PFN_vkGetMemoryFdKHR get_fd = nullptr;
+#endif
 
 	explicit gpu(const std::string & node)
 	{
+#ifdef _WIN32
+		const auto want_luid = win::luid_of(node);
+#else
 		struct stat st{};
 		if (stat(node.c_str(), &st) != 0)
 			throw std::runtime_error("cannot stat " + node);
+#endif
 		VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
 		app.apiVersion = VK_API_VERSION_1_1;
 		VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
@@ -60,11 +92,23 @@ struct gpu
 		vkEnumeratePhysicalDevices(instance, &n, devices.data());
 		for (VkPhysicalDevice d: devices)
 		{
+#ifdef _WIN32
+			VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+#else
 			VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
 			VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES, &drm};
+#endif
 			VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
 			vkGetPhysicalDeviceProperties2(d, &props);
+#ifdef _WIN32
+			uint64_t luid = 0;
+			std::memcpy(&luid, id.deviceLUID, 8); // LowPart, then HighPart: HighPart << 32 | LowPart, like win_gpu
+			const bool match = want_luid ? (id.deviceLUIDValid && luid == *want_luid)
+			                             : props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU || devices.size() == 1;
+			if (match)
+#else
 			if (drm.hasRender && uint32_t(drm.renderMajor) == major(st.st_rdev) && uint32_t(drm.renderMinor) == minor(st.st_rdev))
+#endif
 			{
 				physical = d;
 				std::memcpy(device_uuid.data(), id.deviceUUID, 16);
@@ -93,7 +137,7 @@ struct gpu
 		qci.queueFamilyIndex = family;
 		qci.queueCount = 1;
 		qci.pQueuePriorities = &priority;
-		const char * ext[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME};
+		const char * ext[] = {external_memory_extension};
 		VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 		dci.queueCreateInfoCount = 1;
 		dci.pQueueCreateInfos = &qci;
@@ -105,7 +149,11 @@ struct gpu
 			check(r, "vkCreateDevice");
 		}
 		vkGetDeviceQueue(device, family, 0, &queue);
+#ifdef _WIN32
+		get_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryWin32HandleKHR"));
+#else
 		get_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryFdKHR"));
+#endif
 	}
 	~gpu()
 	{
@@ -117,7 +165,7 @@ struct gpu
 VkBuffer create_buffer(VkDevice device, uint64_t size, VkBufferUsageFlags usage)
 {
 	VkExternalMemoryBufferCreateInfo ext{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
-	ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+	ext.handleTypes = external_handle_type;
 	VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, &ext};
 	bci.size = size;
 	bci.usage = usage;
@@ -135,8 +183,13 @@ struct vk_buffer_pool::impl : gpu
 vk_buffer_pool::vk_buffer_pool(const std::string & node) :
         p(std::make_shared<impl>(node))
 {
+#ifdef _WIN32
+	if (!p->get_handle)
+		throw std::runtime_error("vkGetMemoryWin32HandleKHR unavailable");
+#else
 	if (!p->get_fd)
 		throw std::runtime_error("vkGetMemoryFdKHR unavailable");
+#endif
 }
 
 vk_buffer_pool::~vk_buffer_pool() = default;
@@ -154,8 +207,13 @@ const std::array<uint8_t, 16> & vk_buffer_pool::driver_uuid() const
 std::unique_ptr<dmabuf_image, void (*)(dmabuf_image *)> vk_buffer_pool::allocate(uint32_t w, uint32_t h, bool ten_bit)
 {
 	auto deleter = [](dmabuf_image * i) {
+#ifdef _WIN32
+		if (i->fd)
+			CloseHandle(i->fd);
+#else
 		if (i->fd >= 0)
 			close(i->fd);
+#endif
 		if (i->release)
 			i->release();
 		delete i;
@@ -172,7 +230,7 @@ std::unique_ptr<dmabuf_image, void (*)(dmabuf_image *)> vk_buffer_pool::allocate
 	VkMemoryRequirements req;
 	vkGetBufferMemoryRequirements(p->device, buffer, &req);
 	VkExportMemoryAllocateInfo exp{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
-	exp.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+	exp.handleTypes = external_handle_type;
 	VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &exp};
 	ded.buffer = buffer;
 	VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
@@ -185,17 +243,25 @@ std::unique_ptr<dmabuf_image, void (*)(dmabuf_image *)> vk_buffer_pool::allocate
 		check(r, "vkAllocateMemory(VR buffer)");
 	}
 	vkBindBufferMemory(p->device, buffer, memory, 0);
+#ifdef _WIN32
+	VkMemoryGetWin32HandleInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR};
+	gfi.memory = memory;
+	gfi.handleType = external_handle_type;
+	HANDLE fd = nullptr;
+	VkResult r = p->get_handle(p->device, &gfi, &fd);
+#else
 	VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
 	gfi.memory = memory;
-	gfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+	gfi.handleType = external_handle_type;
 	int fd = -1;
 	VkResult r = p->get_fd(p->device, &gfi, &fd);
+#endif
 	std::shared_ptr<impl> owner = p;
 	img->release = [owner, buffer, memory] {
 		vkDestroyBuffer(owner->device, buffer, nullptr);
 		vkFreeMemory(owner->device, memory, nullptr);
 	};
-	check(r, "vkGetMemoryFdKHR(VR buffer)");
+	check(r, "export VR buffer memory");
 	img->fd = fd;
 	img->size = req.size;
 	return img;
@@ -255,7 +321,7 @@ opaque_buffer_reader::opaque_buffer_reader(const std::string & node) :
 
 opaque_buffer_reader::~opaque_buffer_reader() = default;
 
-const uint8_t * opaque_buffer_reader::read(int fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id)
+const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id)
 {
 	auto it = p->buffers.find(buffer_id);
 	if (it == p->buffers.end() && p->buffers.size() >= 12) // the pool was replaced: forget the old imports
@@ -272,9 +338,15 @@ const uint8_t * opaque_buffer_reader::read(int fd, uint64_t size, uint64_t buffe
 		b.buffer = create_buffer(p->device, buffer_bytes, ipc::opaque_buffer_usage); // identical to the exporter's
 		VkMemoryRequirements req;
 		vkGetBufferMemoryRequirements(p->device, b.buffer, &req);
+#ifdef _WIN32
+		VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
+		imp.handleType = external_handle_type;
+		imp.handle = fd; // NT handles stay ours: importing doesn't take ownership
+#else
 		VkImportMemoryFdInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
-		imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+		imp.handleType = external_handle_type;
 		imp.fd = dup(fd); // Vulkan owns it on success
+#endif
 		VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imp};
 		ded.buffer = b.buffer;
 		VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
@@ -282,7 +354,9 @@ const uint8_t * opaque_buffer_reader::read(int fd, uint64_t size, uint64_t buffe
 		mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		if (VkResult r = vkAllocateMemory(p->device, &mai, nullptr, &b.memory); r != VK_SUCCESS)
 		{
+#ifndef _WIN32
 			close(imp.fd);
+#endif
 			vkDestroyBuffer(p->device, b.buffer, nullptr);
 			check(r, "vkAllocateMemory(import VR buffer)");
 		}

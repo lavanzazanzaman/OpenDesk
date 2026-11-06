@@ -1,4 +1,4 @@
-// VR stream buffers as exportable Vulkan memory (OPAQUE_FD) instead of GBM DMA-BUFs: what NVIDIA needs (its GBM
+// VR stream buffers as exportable Vulkan memory (OPAQUE_FD; on Windows OPAQUE_WIN32 NT handles, on every GPU) instead of GBM DMA-BUFs: what NVIDIA needs (its GBM
 // has no linear render buffers, and NVENC reads CUDA memory, which imports OPAQUE_FD but not DMA-BUF). Same idea as
 // WiVRn's NVENC path. Each buffer holds an NV12/P010 frame; the runtime's compositor converts its composited image
 // into it, the encoder imports the same memory (CUDA for NVENC, a Vulkan readback otherwise).
@@ -39,7 +39,7 @@ class opaque_buffer_reader
 public:
 	explicit opaque_buffer_reader(const std::string & render_node);
 	~opaque_buffer_reader();
-	const uint8_t * read(int fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id);
+	const uint8_t * read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id);
 
 private:
 	struct impl;

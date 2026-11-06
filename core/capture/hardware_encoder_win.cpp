@@ -1,14 +1,30 @@
-// Windows encoder: captured BGRA frames (DXGI Desktop Duplication) -> NV12/P010 -> the first working hardware
-// encoder among NVENC, AMF and QSV, then Media Foundation, then libx264/libx265. One access unit per packet, no
-// B-frames and no lookahead so the headset can present every frame as soon as it arrives.
+// Windows encoder. Inputs:
+//   - desktop: BGRA frames in memory (DXGI Desktop Duplication) -> swscale NV12/P010;
+//   - VR: NV12/P010 frames in exportable Vulkan memory (OPAQUE_WIN32 NT handles, vk_buffers.h) from the runtime.
+// Encoders, on the GPU cfg.render_node names (win_gpu.h): NVENC, AMF, QSV, then Media Foundation and libx264/libx265.
+// NVENC encodes VR frames in place through CUDA (cuImportExternalMemory, like the Linux NVENC path); every other encoder
+// gets a GPU readback of them. One access unit per packet, no B-frames, no lookahead: the headset presents each frame as
+// soon as it arrives.
 #include "hardware_encoder.h"
+#include "vk_buffers.h"
+#include "win_gpu.h"
+
+// hwcontext_cuda.h wants cuda.h only for these two handle types
+#define CUDA_VERSION 12000
+typedef struct CUctx_st * CUcontext;
+typedef struct CUstream_st * CUstream;
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_cuda.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
+
+#include <windows.h>
+#include <dxgi.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -16,6 +32,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -57,9 +74,32 @@ std::vector<encoder_candidate> candidates(video_codec c)
 	return {};
 }
 
+// the vendor's own encoder first, so a hybrid laptop doesn't try NVENC on its Intel/AMD iGPU (and the other way round)
+std::vector<encoder_candidate> ordered_candidates(video_codec c, unsigned vendor)
+{
+	auto list = candidates(c);
+	const char * own = vendor == 0x10de ? "NVENC" : vendor == 0x1002 ? "AMF" : vendor == 0x8086 ? "QSV" : nullptr;
+	if (own)
+		std::stable_partition(list.begin(), list.end(), [&](const encoder_candidate & e) { return std::strcmp(e.backend, own) == 0; });
+	return list;
+}
+
 void set_option(AVCodecContext * ctx, const char * name, const char * value)
 {
 	av_opt_set(ctx->priv_data, name, value, 0); // options a backend does not know are ignored
+}
+
+std::string av_error(int err)
+{
+	char buf[AV_ERROR_MAX_STRING_SIZE]{};
+	av_strerror(err, buf, sizeof(buf));
+	return buf;
+}
+
+void check(int err, const char * what)
+{
+	if (err < 0)
+		throw std::runtime_error(std::format("{}: {}", what, av_error(err)));
 }
 
 void tune(AVCodecContext * ctx, const char * encoder, const encoder_config & cfg)
@@ -71,12 +111,20 @@ void tune(AVCodecContext * ctx, const char * encoder, const encoder_config & cfg
 		set_option(ctx, "rc", "cbr");
 		set_option(ctx, "zerolatency", "1");
 		set_option(ctx, "delay", "0");
+		set_option(ctx, "rc-lookahead", "0");
 		set_option(ctx, "forced-idr", "1");
 		set_option(ctx, "surfaces", "4");
 		// "2-Pass encoding": NVENC's pre-analysis pass at quarter resolution gives most of the rate-control
 		// gain for a fraction of the GPU time (same mapping as the Linux NVENC path).
 		set_option(ctx, "multipass", cfg.pre_encode ? "qres" : "disabled");
 		set_option(ctx, "spatial-aq", cfg.vbaq ? "1" : "0");
+		// like Linux: no periodic keyframes; intra refresh rebuilds the picture over a second instead (no decode spikes
+		// on the headset), IDRs still come on request
+		if (av_opt_find(ctx->priv_data, "intra-refresh", nullptr, 0, 0))
+		{
+			set_option(ctx, "intra-refresh", "1");
+			ctx->gop_size = std::max(cfg.fps, 1);
+		}
 	}
 	else if (std::strstr(encoder, "amf"))
 	{
@@ -84,6 +132,10 @@ void tune(AVCodecContext * ctx, const char * encoder, const encoder_config & cfg
 		set_option(ctx, "quality", "speed");
 		set_option(ctx, "rc", "cbr");
 		set_option(ctx, "enforce_hrd", "1");
+		// "2-Pass encoding" -> AMF pre-analysis, "Adaptive quantization" -> VBAQ (the Linux VAAPI path sets the same
+		// two through Mesa's quality-level bits)
+		set_option(ctx, "preanalysis", cfg.pre_encode ? "1" : "0");
+		set_option(ctx, "vbaq", cfg.vbaq ? "1" : "0");
 	}
 	else if (std::strstr(encoder, "qsv"))
 	{
@@ -108,7 +160,192 @@ void tune(AVCodecContext * ctx, const char * encoder, const encoder_config & cfg
 		set_option(ctx, "x265-params", "log-level=error:bframes=0");
 	}
 }
+
+// FFmpeg's D3D11VA device string is the adapter's index among all DXGI adapters
+int dxgi_index(uint64_t luid)
+{
+	IDXGIFactory1 * factory = nullptr;
+	if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&factory))))
+		return -1;
+	int found = -1;
+	IDXGIAdapter1 * a = nullptr;
+	for (UINT i = 0; found < 0 && factory->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; ++i)
+	{
+		DXGI_ADAPTER_DESC1 d{};
+		if (SUCCEEDED(a->GetDesc1(&d)) && ((uint64_t(uint32_t(d.AdapterLuid.HighPart)) << 32 | d.AdapterLuid.LowPart) == luid))
+			found = int(i);
+		a->Release();
+	}
+	factory->Release();
+	return found;
+}
+
+HMODULE nvcuda()
+{
+	static HMODULE lib = LoadLibraryW(L"nvcuda.dll"); // stays loaded (FFmpeg uses it too)
+	return lib;
+}
+
+template <class F>
+F cuda_symbol(const char * name)
+{
+	HMODULE lib = nvcuda();
+	return lib ? reinterpret_cast<F>(reinterpret_cast<void *>(GetProcAddress(lib, name))) : nullptr;
+}
+
+// the CUDA ordinal of the GPU with this LUID
+int cuda_device(uint64_t luid)
+{
+	auto init = cuda_symbol<int (*)(unsigned)>("cuInit");
+	auto count_fn = cuda_symbol<int (*)(int *)>("cuDeviceGetCount");
+	auto get = cuda_symbol<int (*)(int *, int)>("cuDeviceGet");
+	auto get_luid = cuda_symbol<int (*)(char *, unsigned *, int)>("cuDeviceGetLuid");
+	int count = 0;
+	if (!init || !count_fn || !get || !get_luid || init(0) || count_fn(&count))
+		throw std::runtime_error("NVIDIA CUDA driver unavailable (nvcuda.dll)");
+	for (int i = 0; i < count; ++i)
+	{
+		int dev = 0;
+		char id[8]{};
+		unsigned mask = 0;
+		uint64_t value = 0;
+		if (!get(&dev, i) && !get_luid(id, &mask, dev))
+		{
+			std::memcpy(&value, id, 8);
+			if (value == luid)
+				return i;
+		}
+	}
+	throw std::runtime_error("no CUDA device has the VR GPU's LUID");
+}
 } // namespace
+
+// The few CUDA driver API calls for importing Vulkan memory (cuda.h types, stable ABI), from nvcuda.dll at runtime
+struct hardware_encoder::cuda_state
+{
+	using CUresult = int;
+	using CUdeviceptr = unsigned long long;
+	using CUexternalMemory = void *;
+	struct handle_desc
+	{
+		int type; // CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32 = 2
+		union
+		{
+			int fd;
+			struct
+			{
+				void * handle;
+				const void * name;
+			} win32;
+			const void * sci;
+		} handle;
+		unsigned long long size;
+		unsigned int flags; // CUDA_EXTERNAL_MEMORY_DEDICATED = 1
+		unsigned int reserved[16];
+	};
+	struct buffer_desc
+	{
+		unsigned long long offset, size;
+		unsigned int flags;
+		unsigned int reserved[16];
+	};
+	static_assert(sizeof(handle_desc) == 104 && sizeof(buffer_desc) == 88);
+
+	CUresult (*import_memory)(CUexternalMemory *, const handle_desc *) = nullptr;
+	CUresult (*mapped_buffer)(CUdeviceptr *, CUexternalMemory, const buffer_desc *) = nullptr;
+	CUresult (*destroy_memory)(CUexternalMemory) = nullptr;
+	CUresult (*mem_free)(CUdeviceptr) = nullptr;
+	CUresult (*push)(CUcontext) = nullptr;
+	CUresult (*pop)(CUcontext *) = nullptr;
+
+	AVBufferRef * device = nullptr;
+	AVBufferRef * frames = nullptr;
+	CUcontext ctx = nullptr;
+	struct buffer
+	{
+		CUexternalMemory memory = nullptr;
+		CUdeviceptr ptr = 0;
+		AVBufferRef * ref = nullptr;
+	};
+	std::map<uint64_t, buffer> buffers; // by captured_frame::buffer_id
+
+	cuda_state(uint64_t luid, int width, int height, AVPixelFormat sw_format)
+	{
+		import_memory = cuda_symbol<decltype(import_memory)>("cuImportExternalMemory");
+		mapped_buffer = cuda_symbol<decltype(mapped_buffer)>("cuExternalMemoryGetMappedBuffer");
+		destroy_memory = cuda_symbol<decltype(destroy_memory)>("cuDestroyExternalMemory");
+		mem_free = cuda_symbol<decltype(mem_free)>("cuMemFree_v2");
+		push = cuda_symbol<decltype(push)>("cuCtxPushCurrent_v2");
+		pop = cuda_symbol<decltype(pop)>("cuCtxPopCurrent_v2");
+		if (!import_memory || !mapped_buffer || !destroy_memory || !mem_free || !push || !pop)
+			throw std::runtime_error("nvcuda.dll lacks external memory support");
+		check(av_hwdevice_ctx_create(&device, AV_HWDEVICE_TYPE_CUDA, std::to_string(cuda_device(luid)).c_str(), nullptr, 0), "CUDA device");
+		ctx = static_cast<AVCUDADeviceContext *>(reinterpret_cast<AVHWDeviceContext *>(device->data)->hwctx)->cuda_ctx;
+		frames = av_hwframe_ctx_alloc(device);
+		auto * fc = reinterpret_cast<AVHWFramesContext *>(frames->data);
+		fc->format = AV_PIX_FMT_CUDA;
+		fc->sw_format = sw_format; // NV12 / P010 from the runtime
+		fc->width = width;
+		fc->height = height;
+		check(av_hwframe_ctx_init(frames), "CUDA frames");
+	}
+
+	~cuda_state()
+	{
+		clear();
+		av_buffer_unref(&frames);
+		av_buffer_unref(&device);
+	}
+
+	void clear()
+	{
+		if (buffers.empty())
+			return;
+		push(ctx);
+		for (auto & [id, b]: buffers)
+		{
+			av_buffer_unref(&b.ref);
+			mem_free(b.ptr);
+			destroy_memory(b.memory);
+		}
+		CUcontext popped;
+		pop(&popped);
+		buffers.clear();
+	}
+
+	const buffer & import(const captured_frame & f)
+	{
+		if (auto it = buffers.find(f.buffer_id); it != buffers.end())
+			return it->second;
+		push(ctx);
+		struct pop_on_exit
+		{
+			cuda_state * s;
+			~pop_on_exit()
+			{
+				CUcontext popped;
+				s->pop(&popped);
+			}
+		} guard{this};
+		handle_desc hd{};
+		hd.type = 2;
+		hd.handle.win32.handle = f.fd; // an NT handle stays ours: CUDA duplicates what it needs
+		hd.size = f.size;
+		hd.flags = 1;
+		buffer b;
+		if (CUresult r = import_memory(&b.memory, &hd); r != 0)
+			throw std::runtime_error(std::format("cuImportExternalMemory failed ({})", r));
+		buffer_desc bd{};
+		bd.size = f.size;
+		if (CUresult r = mapped_buffer(&b.ptr, b.memory, &bd); r != 0)
+		{
+			destroy_memory(b.memory);
+			throw std::runtime_error(std::format("cuExternalMemoryGetMappedBuffer failed ({})", r));
+		}
+		b.ref = av_buffer_create(reinterpret_cast<uint8_t *>(b.ptr), f.size, [](void *, uint8_t *) {}, nullptr, 0);
+		return buffers.emplace(f.buffer_id, b).first->second;
+	}
+};
 
 hardware_encoder::hardware_encoder(encoder_config c) :
         cfg(std::move(c))
@@ -122,6 +359,8 @@ hardware_encoder::~hardware_encoder()
 	sws_freeContext(sws);
 	av_frame_free(&last);
 	avcodec_free_context(&codec);
+	cuda.reset();
+	av_buffer_unref(&hw_device);
 }
 
 void hardware_encoder::note(const std::string & line)
@@ -134,46 +373,29 @@ std::string hardware_encoder::input_path() const
 {
 	if (!selected)
 		return "not initialized";
+	if (src_opaque)
+		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : "GPU readback");
 	return std::format("{}, CPU (Desktop Duplication)", selected);
 }
 
-// Frames arrive as BGRA at the desktop's stride. P010 for 10-bit HEVC/AV1, NV12 otherwise.
-void hardware_encoder::setup(const captured_frame & f)
+// opens the first working encoder for `input` (a software format, or CUDA frames of `frames`)
+void hardware_encoder::open_codec(AVPixelFormat input, AVBufferRef * frames)
 {
 	const int w = cfg.width, h = cfg.height;
-	if (w <= 0 || h <= 0)
-		throw std::runtime_error("invalid frame size");
-	if (f.data == nullptr)
-		throw std::runtime_error("no frame memory");
-	const AVPixelFormat src = f.av_sw_format < 0 ? AV_PIX_FMT_BGRA : AVPixelFormat(f.av_sw_format);
-	if (codec && src == src_format && w == src_width && h == src_height && int(f.stride) == src_stride)
-		return;
-
-	sws_freeContext(sws);
-	sws = nullptr;
-	av_frame_free(&last);
-	codec_def = nullptr;
-	selected = nullptr;
-	avcodec_free_context(&codec);
-	src_format = src;
-	src_width = w;
-	src_height = h;
-	src_stride = int(f.stride);
-	pts = 0;
-
-	const AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
-	sws = sws_getContext(w, h, src, w, h, dst, SWS_BILINEAR, nullptr, nullptr, nullptr);
-	if (!sws)
-		throw std::runtime_error("cannot convert the captured frame to NV12/P010");
-	if (cfg.full_range)
+	const auto gpu = win::adapter(cfg.render_node);
+	const unsigned vendor = gpu ? gpu->vendor : 0;
+	if (!hw_device && gpu && !frames)
 	{
-		const int * table = sws_getCoefficients(SWS_CS_DEFAULT);
-		sws_setColorspaceDetails(sws, table, 1, table, 1, 0, 1 << 16, 1 << 16);
+		// a D3D11 device on the chosen adapter picks the GPU for NVENC / AMF / QSV (sw frames are uploaded there)
+		const int index = dxgi_index(gpu->luid);
+		if (index >= 0)
+			av_hwdevice_ctx_create(&hw_device, AV_HWDEVICE_TYPE_D3D11VA, std::to_string(index).c_str(), nullptr, 0);
 	}
-
 	std::string errors;
-	for (const auto & c: candidates(cfg.codec))
+	for (const auto & c: ordered_candidates(cfg.codec, vendor))
 	{
+		if (frames && std::strcmp(c.backend, "NVENC") != 0)
+			continue; // CUDA frames: NVENC only
 		const AVCodec * def = avcodec_find_encoder_by_name(c.name);
 		if (!def)
 			continue;
@@ -184,40 +406,103 @@ void hardware_encoder::setup(const captured_frame & f)
 		ctx->height = h;
 		ctx->time_base = {1, std::max(cfg.fps, 1)};
 		ctx->framerate = {std::max(cfg.fps, 1), 1};
-		ctx->pix_fmt = dst;
+		ctx->pix_fmt = frames ? AV_PIX_FMT_CUDA : input;
+		if (frames)
+			ctx->hw_frames_ctx = av_buffer_ref(frames);
+		else if (hw_device && c.hardware && std::strcmp(c.backend, "Media Foundation") != 0)
+			ctx->hw_device_ctx = av_buffer_ref(hw_device);
 		ctx->bit_rate = int64_t(std::max(cfg.kbps, 500)) * 1000;
 		ctx->rc_max_rate = ctx->bit_rate;
 		ctx->rc_buffer_size = int(ctx->bit_rate / std::max(cfg.fps, 1) * 2);
-		ctx->gop_size = std::max(cfg.fps, 1) * 2;
+		ctx->gop_size = std::max(cfg.fps, 1) * 10; // IDR on demand (ForceKeyFrame) + safety net, like Linux
 		ctx->max_b_frames = 0;
 		ctx->thread_count = 1;
 		ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 		ctx->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+		ctx->colorspace = AVCOL_SPC_BT709;
+		ctx->color_primaries = AVCOL_PRI_BT709;
+		ctx->color_trc = AVCOL_TRC_BT709;
 		if (is_hevc(cfg.codec))
 			ctx->profile = is_10bit(cfg.codec) ? AV_PROFILE_HEVC_MAIN_10 : AV_PROFILE_HEVC_MAIN;
 		else if (is_av1(cfg.codec))
-			ctx->profile = is_10bit(cfg.codec) ? AV_PROFILE_AV1_HIGH : AV_PROFILE_AV1_MAIN;
+			ctx->profile = AV_PROFILE_AV1_MAIN; // Main covers 8- and 10-bit 4:2:0
 		else
 			ctx->profile = AV_PROFILE_H264_HIGH;
 		tune(ctx, c.name, cfg);
 		const int err = avcodec_open2(ctx, def, nullptr);
 		if (err < 0)
 		{
-			char buf[AV_ERROR_MAX_STRING_SIZE]{};
-			av_strerror(err, buf, sizeof(buf));
-			errors += std::format(" {}: {};", c.name, buf);
+			errors += std::format(" {}: {};", c.name, av_error(err));
 			avcodec_free_context(&ctx);
 			continue;
 		}
 		codec = ctx;
 		codec_def = def;
 		selected = c.backend;
-		note(std::format("[encode] {} {}x{} @{} fps, {} kbit/s, {} range{}{}", c.name, w, h, cfg.fps, cfg.kbps,
-		                 cfg.full_range ? "full" : "limited", cfg.pre_encode ? ", 2-pass" : "", cfg.vbaq ? ", AQ" : ""));
-		break;
+		note(std::format("[encode] {} {}x{} @{} fps, {} kbit/s, {} range{}{} on {}", c.name, w, h, cfg.fps, cfg.kbps,
+		                 cfg.full_range ? "full" : "limited", cfg.pre_encode ? ", 2-pass" : "", cfg.vbaq ? ", AQ" : "",
+		                 gpu ? gpu->name : std::string("the default GPU")));
+		return;
 	}
-	if (!codec)
-		throw std::runtime_error("no usable encoder:" + errors);
+	throw std::runtime_error("no usable encoder:" + errors);
+}
+
+void hardware_encoder::setup(const captured_frame & f)
+{
+	const int w = cfg.width, h = cfg.height;
+	if (w <= 0 || h <= 0)
+		throw std::runtime_error("invalid frame size");
+	if (!f.opaque_buffer && f.data == nullptr)
+		throw std::runtime_error("no frame memory");
+	const AVPixelFormat src = f.av_sw_format < 0 ? AV_PIX_FMT_BGRA : AVPixelFormat(f.av_sw_format);
+	if (codec && src == src_format && w == src_width && h == src_height && int(f.stride) == src_stride && f.opaque_buffer == src_opaque)
+		return;
+
+	sws_freeContext(sws);
+	sws = nullptr;
+	av_frame_free(&last);
+	codec_def = nullptr;
+	selected = nullptr;
+	avcodec_free_context(&codec);
+	cuda.reset();
+	cuda_input = false;
+	src_format = src;
+	src_width = w;
+	src_height = h;
+	src_stride = int(f.stride);
+	src_opaque = f.opaque_buffer;
+	pts = 0;
+
+	const AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+	// VR frames already in the codec's layout go to NVENC through CUDA without a copy
+	const auto gpu = win::adapter(cfg.render_node);
+	if (f.opaque_buffer && !cuda_failed && gpu && gpu->vendor == 0x10de && src == (is_10bit(cfg.codec) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12))
+		try
+		{
+			cuda = std::make_unique<cuda_state>(gpu->luid, w, h, src);
+			open_codec(dst, cuda->frames);
+			cuda_input = true;
+			return;
+		}
+		catch (const std::exception & e)
+		{
+			note(std::string("[encoder] CUDA input unavailable (") + e.what() + "): reading the frames back");
+			avcodec_free_context(&codec);
+			cuda.reset();
+			cuda_failed = true;
+		}
+
+	// NV12/P010 in (VR readback): copied plane by plane when the format matches, else converted
+	if (src != dst || !f.uv_offset)
+	{
+		sws = sws_getContext(w, h, src, w, h, dst, SWS_BILINEAR, nullptr, nullptr, nullptr);
+		if (!sws)
+			throw std::runtime_error("cannot convert the frame to NV12/P010");
+		const int * table = sws_getCoefficients(SWS_CS_ITU709);
+		// RGB input is full range; NV12/P010 from the runtime already has the stream's range
+		sws_setColorspaceDetails(sws, table, f.uv_offset ? cfg.full_range : 1, table, cfg.full_range, 0, 1 << 16, 1 << 16);
+	}
+	open_codec(dst, nullptr);
 
 	last = av_frame_alloc();
 	if (!last)
@@ -225,25 +510,79 @@ void hardware_encoder::setup(const captured_frame & f)
 	last->format = dst;
 	last->width = w;
 	last->height = h;
-	last->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 	if (av_frame_get_buffer(last, 32) < 0)
 		throw std::runtime_error("cannot allocate the encoder frame buffer");
 	last->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 }
 
-void hardware_encoder::convert(const captured_frame & f)
+void hardware_encoder::convert(const captured_frame & frame)
 {
 	if (!codec)
-		setup(f);
-	const uint8_t * src[4] = {f.data, nullptr, nullptr, nullptr};
-	int strides[4] = {int(f.stride), 0, 0, 0};
-	sws_scale(sws, src, strides, 0, cfg.height, last->data, last->linesize);
+		setup(frame);
+	if (cuda_input)
+	{
+		if (!cuda->buffers.count(frame.buffer_id) && cuda->buffers.size() >= 12)
+			cuda->clear(); // the runtime's buffer pool was replaced
+		const auto & b = cuda->import(frame);
+		AVFrame * in = av_frame_alloc();
+		in->format = AV_PIX_FMT_CUDA;
+		in->width = cfg.width;
+		in->height = cfg.height;
+		in->hw_frames_ctx = av_buffer_ref(cuda->frames);
+		in->buf[0] = av_buffer_ref(b.ref);
+		in->data[0] = reinterpret_cast<uint8_t *>(b.ptr);
+		in->linesize[0] = int(frame.stride);
+		in->data[1] = reinterpret_cast<uint8_t *>(b.ptr + frame.uv_offset); // chroma right after the luma rows
+		in->linesize[1] = int(frame.stride);
+		in->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+		av_frame_free(&last);
+		last = in;
+		return;
+	}
+	const uint8_t * pixels = frame.data;
+	if (frame.opaque_buffer)
+	{
+		if (!opaque)
+			opaque = std::make_unique<opaque_buffer_reader>(cfg.render_node);
+		pixels = opaque->read(frame.fd, frame.size, frame.buffer_bytes, frame.buffer_id);
+	}
+	check(av_frame_make_writable(last), "encoder frame");
+	if (sws)
+	{
+		const uint8_t * src[4] = {pixels, frame.uv_offset ? pixels + frame.uv_offset : nullptr, nullptr, nullptr};
+		int strides[4] = {int(frame.stride), frame.uv_offset ? int(frame.stride) : 0, 0, 0};
+		sws_scale(sws, src, strides, 0, cfg.height, last->data, last->linesize);
+		return;
+	}
+	// same layout: luma rows, then interleaved chroma rows
+	const int bytes_per_sample = is_10bit(cfg.codec) ? 2 : 1;
+	av_image_copy_plane(last->data[0], last->linesize[0], pixels, int(frame.stride), cfg.width * bytes_per_sample, cfg.height);
+	av_image_copy_plane(last->data[1], last->linesize[1], pixels + frame.uv_offset, int(frame.stride), cfg.width * bytes_per_sample,
+	                    cfg.height / 2);
 }
 
 void hardware_encoder::prime(const captured_frame & f)
 {
 	if (!codec)
 		setup(f);
+	if (!cuda_input)
+		return;
+	// one trial encode through CUDA (the output is dropped; the stream starts with an IDR anyway)
+	try
+	{
+		convert(f);
+		send_frame(true, [](bytes &&, bool) {});
+	}
+	catch (const std::exception & e)
+	{
+		note(std::string("[encoder] NVENC from CUDA failed (") + e.what() + "): reading the frames back");
+		av_frame_free(&last);
+		avcodec_free_context(&codec);
+		cuda.reset();
+		cuda_input = false;
+		cuda_failed = true;
+		setup(f);
+	}
 }
 
 void hardware_encoder::stage(const captured_frame & f)
@@ -255,24 +594,25 @@ void hardware_encoder::send_frame(bool force_idr, const au_callback & cb)
 {
 	if (!codec || !last)
 		throw std::runtime_error("encoder is not initialized");
-	last->pts = pts++;
+	AVFrame * frame = last;
+	AVFrame * clone = nullptr;
+	if (cuda_input) // the encoder may keep a reference while the runtime's buffer is reused: send a clone
+		frame = clone = av_frame_clone(last);
+	frame->pts = pts++;
 	if (force_idr)
 	{
-		last->pict_type = AV_PICTURE_TYPE_I;
-		last->flags |= AV_FRAME_FLAG_KEY;
+		frame->pict_type = AV_PICTURE_TYPE_I;
+		frame->flags |= AV_FRAME_FLAG_KEY;
 	}
 	else
 	{
-		last->pict_type = AV_PICTURE_TYPE_NONE;
-		last->flags &= ~AV_FRAME_FLAG_KEY;
+		frame->pict_type = AV_PICTURE_TYPE_NONE;
+		frame->flags &= ~AV_FRAME_FLAG_KEY;
 	}
-	const int err = avcodec_send_frame(codec, last);
+	const int err = avcodec_send_frame(codec, frame);
+	av_frame_free(&clone);
 	if (err < 0)
-	{
-		char buf[AV_ERROR_MAX_STRING_SIZE]{};
-		av_strerror(err, buf, sizeof(buf));
-		throw std::runtime_error(std::format("{} rejected a frame: {}", selected ? selected : "encoder", buf));
-	}
+		throw std::runtime_error(std::format("{} rejected a frame: {}", selected ? selected : "encoder", av_error(err)));
 	while (true)
 	{
 		AVPacket * pkt = av_packet_alloc();
@@ -287,11 +627,13 @@ void hardware_encoder::send_frame(bool force_idr, const au_callback & cb)
 		if (r < 0)
 		{
 			av_packet_free(&pkt);
-			char buf[AV_ERROR_MAX_STRING_SIZE]{};
-			av_strerror(r, buf, sizeof(buf));
-			throw std::runtime_error(std::format("{} encode error: {}", selected ? selected : "encoder", buf));
+			throw std::runtime_error(std::format("{} encode error: {}", selected ? selected : "encoder", av_error(r)));
 		}
-		bytes au(reinterpret_cast<const uint8_t *>(pkt->data), reinterpret_cast<const uint8_t *>(pkt->data) + pkt->size);
+		bytes au;
+		// AV1 "low overhead" stream for MediaCodec: each temporal unit starts with a temporal delimiter OBU
+		if (is_av1(cfg.codec) && pkt->size > 0 && ((pkt->data[0] >> 3) & 0x0f) != 2)
+			au = {0x12, 0x00};
+		au.insert(au.end(), pkt->data, pkt->data + pkt->size);
 		const bool sync = (pkt->flags & AV_PKT_FLAG_KEY) != 0;
 		av_packet_free(&pkt);
 		if (!au.empty())
@@ -314,35 +656,40 @@ bool hardware_encoder::reencode_last(bool force_idr, const au_callback & cb)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Free functions. Windows has no DRM render nodes: the encoder backends are probed directly.
+// Free functions. Windows has no DRM render nodes: "luid:<hex>" names a DXGI adapter (win_gpu.h).
 
 std::string default_render_node()
 {
-	return {};
+	if (const char * node = std::getenv("OPENDESK_RENDER_NODE"); node && *node)
+		return node;
+	auto a = win::adapter({}); // the first adapter drives the primary display
+	return a ? win::node_for(a->luid) : std::string();
 }
 
 std::string vr_render_node()
 {
-	return {};
+	return win::vr_node();
 }
 
-unsigned gpu_vendor(const std::string &)
+unsigned gpu_vendor(const std::string & node)
 {
-	return 0;
+	auto a = win::adapter(node);
+	return a ? a->vendor : 0;
 }
 
-std::string hardware_encoder_probe(const std::string &)
+std::string hardware_encoder_probe(const std::string & node)
 {
 	try
 	{
-		hardware_encoder enc({256, 256, 60, 1000, video_codec::h264, {}});
+		hardware_encoder enc({256, 256, 60, 1000, video_codec::h264, node});
 		std::vector<uint8_t> pixels(256 * 256 * 4, 0);
 		captured_frame f;
 		f.data = pixels.data();
 		f.stride = 256 * 4;
 		f.av_sw_format = AV_PIX_FMT_BGRA;
 		bool got = false;
-		enc.encode(f, true, [&](bytes &&, bool) { got = true; });
+		for (int i = 0; i < 8 && !got; ++i)
+			enc.encode(f, i == 0, [&](bytes &&, bool) { got = true; });
 		return got ? "" : "the encoder produced no frame";
 	}
 	catch (const std::exception & e)
@@ -351,7 +698,7 @@ std::string hardware_encoder_probe(const std::string &)
 	}
 }
 
-std::vector<video_codec> hardware_encoder_codecs(const std::string &)
+std::vector<video_codec> hardware_encoder_codecs(const std::string & node)
 {
 	std::vector<video_codec> out;
 	for (video_codec c: {video_codec::h264, video_codec::hevc, video_codec::hevc_10bit, video_codec::av1, video_codec::av1_10bit})
@@ -360,7 +707,7 @@ std::vector<video_codec> hardware_encoder_codecs(const std::string &)
 		{
 			// A real stream size: some encoders reject tiny frames for HEVC/AV1.
 			constexpr int w = 1280, h = 720;
-			hardware_encoder enc({w, h, 60, 5000, c, {}});
+			hardware_encoder enc({w, h, 60, 5000, c, node});
 			std::vector<uint8_t> pixels(size_t(w) * h * 4, 0);
 			captured_frame f;
 			f.data = pixels.data();

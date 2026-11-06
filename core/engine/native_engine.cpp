@@ -9,6 +9,8 @@
 #include "netbuf.h"
 #include "video_library.h"
 #include "video.h"
+#include "runtime_registration.h"
+#include "vr_sender.h"
 
 #ifdef _WIN32
 #include "audio_win.h"
@@ -24,8 +26,6 @@
 #include "gamepad.h"
 #include "input.h"
 #include "pulse.h"
-#include "runtime_registration.h"
-#include "vr_sender.h"
 
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -305,12 +305,10 @@ void native_engine::on_keyboard_layout_changed(uint)
 
 native_engine::~native_engine()
 {
-#ifndef _WIN32
-	openxr_runtime::restore(); // hand the system its OpenXR runtime back
+	openxr_runtime::restore(); // hand the system its OpenXR runtime back (Windows: when that needs no UAC prompt)
 	openvr_runtime::restore(); // ... and its OpenVR runtime
 	if (vr)
 		vr->set_sink(nullptr);
-#endif
 	if (current)
 		stop_video_source(current.get());
 }
@@ -625,10 +623,8 @@ void native_engine::on_messaging_connection()
 		                     {"InputLanguage", input_language()}};
 		if (vr_available())
 			settings["ActiveRuntime"] = 2; // OpenDesk XR
-#ifndef _WIN32
 		if (vr && vr->has_client())
 			settings["StreamingSource"] = 1; // a VR app is already running
-#endif
 		send_streamer_settings(settings, true);
 
 		session * sess = current.get();
@@ -698,10 +694,8 @@ void native_engine::on_messaging_connection()
 					info("[input] virtual gamepad removed (headset stopped emulating)");
 					sess->gamepad.reset();
 				}
-#ifndef _WIN32
 				if (m->type == uint8_t(message_type::skeleton_data_changed) && vr)
 					vr->set_skeleton(m->payload.data(), m->payload.size());
-#endif
 				if (m->type == uint8_t(message_type::recenter)) {
 					++options.render.recenter_serial;
 					update_vr_server();
@@ -884,10 +878,8 @@ void native_engine::on_data_connection()
 					sess->vr_tracking->arrivals[size_t(uint32_t(index)) % sess->vr_tracking->arrivals.size()] = {
 					        index, std::chrono::steady_clock::now().time_since_epoch().count()};
 				}
-#ifndef _WIN32
 				if (vr)
 					vr->update_tracking(frame.data(), frame.size());
-#endif
 				if (face)
 					face->on_frame_data(frame.data(), frame.size());
 				sess->latest_frame_data = std::move(frame);
@@ -997,7 +989,6 @@ void native_engine::on_video_connection()
 				}
 				if (sess->video_in.size() < size_t(size) + 4)
 					break;
-#ifndef _WIN32
 				if (size == 16 && vr)
 				{
 					float g[2][2];
@@ -1010,7 +1001,6 @@ void native_engine::on_video_connection()
 						info(QString("[vr] eye tracking: gaze %1,%2 / %3,%4 (per eye)").arg(g[0][0]).arg(g[0][1]).arg(g[1][0]).arg(g[1][1]));
 					}
 				}
-#endif
 				sess->video_in.erase(sess->video_in.begin(), sess->video_in.begin() + 4 + size);
 			}
 		});
@@ -1214,23 +1204,6 @@ bool native_engine::vr_test_pattern()
 	return on;
 }
 
-#ifdef _WIN32
-bool native_engine::vr_available() const
-{
-	return false; // the bundled OpenXR runtime is Linux-only
-}
-
-// a game launched from the headset that hasn't rendered yet (Proton + shader caches can take a while)
-bool native_engine::game_launch_pending() const
-{
-	return QDateTime::currentMSecsSinceEpoch() < vr_wait_until_ms;
-}
-
-void native_engine::sync_vr_state()
-{
-	update_video(true);
-}
-#else
 bool native_engine::vr_available() const
 {
 	return (vr && vr->rendering()) || vr_linger || vr_test_pattern();
@@ -1264,23 +1237,67 @@ void native_engine::sync_vr_state()
 	update_vr_server();
 	update_video(true);
 }
-#endif
 
 void native_engine::stop_video_source(session * sess)
 {
-#ifndef _WIN32
 	if (vr)
 		vr->set_sink(nullptr); // the server must drop its reference before the sender goes away
-#endif
 	if (sess)
 		sess->video.reset();
 }
 
 #ifdef _WIN32
-void native_engine::fetch_xrizer() {}
-void native_engine::apply_game_priority() {}
-void native_engine::update_vr_server() {}
-void native_engine::start_vr(bool) {}
+// Windows: xrizer comes with the installer (<install>\xrizer) or OPENDESK_XRIZER; there is no download step
+void native_engine::fetch_xrizer()
+{
+	if (xrizer_fetch_started)
+		return;
+	xrizer_fetch_started = true;
+	info("[openvr] xrizer is not installed: OpenVR games need SteamVR (reinstall OpenDesk or set OPENDESK_XRIZER)");
+}
+
+// "Boost game priority": the VR app's process above normal and its render thread at highest priority. Both work on
+// the user's own processes without administrator rights (elevated games refuse; that is reported).
+void native_engine::apply_game_priority()
+{
+	if (options.boost_priority && render_tid > 0 && boosted_tid != render_tid)
+	{
+		HANDLE process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_pid));
+		HANDLE thread = OpenThread(THREAD_SET_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_tid));
+		bool ok = thread && SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
+		if (process)
+		{
+			if (GetPriorityClass(process) == NORMAL_PRIORITY_CLASS)
+				SetPriorityClass(process, ABOVE_NORMAL_PRIORITY_CLASS);
+			CloseHandle(process);
+		}
+		if (thread)
+			CloseHandle(thread);
+		if (ok)
+		{
+			boosted_tid = render_tid;
+			info(QString("[priority] VR app (pid %1): render thread %2 at highest priority").arg(render_pid).arg(render_tid));
+		}
+		else
+			info(QString("[priority] cannot raise the VR app's priority (error %1)").arg(GetLastError()));
+	}
+	else if (!options.boost_priority && boosted_tid > 0)
+	{
+		if (HANDLE thread = OpenThread(THREAD_SET_INFORMATION, FALSE, DWORD(boosted_tid)))
+		{
+			SetThreadPriority(thread, THREAD_PRIORITY_NORMAL);
+			CloseHandle(thread);
+		}
+		if (HANDLE process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_pid)))
+		{
+			if (GetPriorityClass(process) == ABOVE_NORMAL_PRIORITY_CLASS)
+				SetPriorityClass(process, NORMAL_PRIORITY_CLASS);
+			CloseHandle(process);
+		}
+		info(QString("[priority] VR app render thread %1 back to normal priority").arg(boosted_tid));
+		boosted_tid = 0;
+	}
+}
 #else
 // our xrizer (never a system install) is missing: tools/get_xrizer.sh downloads xrizer's CI nightly, once per run
 void native_engine::fetch_xrizer()
@@ -1336,6 +1353,8 @@ void native_engine::apply_game_priority()
 	}
 }
 
+#endif
+
 void native_engine::update_vr_server()
 {
 	// system OpenXR runtime: ours while the streamer runs, the user's own again afterwards
@@ -1345,8 +1364,19 @@ void native_engine::update_vr_server()
 		if (error.empty())
 		{
 			runtime_registered = true;
+#ifdef _WIN32
+			info(QString("[openxr] OpenDesk XR is the active OpenXR runtime (%1)")
+			             .arg(QString::fromStdString(openxr_runtime::installed_manifest())));
+#else
 			info(QString("[openxr] OpenDesk XR is the active OpenXR runtime (%1); restored when the streamer exits")
 			             .arg(QString::fromStdString(openxr_runtime::installed_manifest())));
+#endif
+		}
+		else if (error.starts_with("pending"))
+		{
+			if (!runtime_pending_logged)
+				info(QString("[openxr] %1").arg(QString::fromStdString(error.substr(9))));
+			runtime_pending_logged = true;
 		}
 		else
 			info(QString("[openxr] cannot register OpenDesk XR: %1").arg(QString::fromStdString(error)));
@@ -1417,7 +1447,11 @@ void native_engine::update_vr_server()
 				});
 			};
 			vr = std::make_unique<vr_server>(vr_render_node(), cb);
+#ifdef _WIN32
+			info(QString("[vr-ipc] OpenXR runtime pipe ready: %1").arg(QString::fromStdWString(ipc::pipe_name())));
+#else
 			info(QString("[vr-ipc] OpenXR runtime socket ready: %1").arg(QString::fromStdString(ipc::socket_path())));
+#endif
 			if (vr_render_node() != default_render_node())
 				info(QString("[vr] VR apps render and encode on %1 (discrete GPU; the display runs on %2)")
 				             .arg(QString::fromStdString(vr_render_node()), QString::fromStdString(default_render_node())));
@@ -1575,8 +1609,6 @@ void native_engine::start_vr(bool force)
 	emit_event("video", {{"mode", "vr"}, {"fps", p.fps}, {"kbps", p.kbps}, {"codec", codec_name(p.codec)},
 	                     {"source", external ? vr_app : QString("test pattern")}});
 }
-
-#endif
 
 void native_engine::schedule_video_restart(int delay_ms)
 {
@@ -1965,13 +1997,11 @@ void native_engine::exit_game(game_id id)
 		for (const auto & r: running)
 			if (r.second)
 				exit_game(r);
-#ifndef _WIN32
 		if (running.empty() && vr && vr->client_pid() > 0)
 		{
 			info(QString("[games] closing the OpenXR app %1").arg(vr_app));
 			platform::terminate_process(vr->client_pid(), false);
 		}
-#endif
 		return;
 	}
 	const game_entry * g = find_game(id);

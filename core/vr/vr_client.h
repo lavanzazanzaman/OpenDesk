@@ -1,9 +1,11 @@
 // Client side of vr_ipc.h (runs inside the OpenXR app: libovr-opendesk, test clients). No Qt, no streamer internals.
 #pragma once
 
+#include "native_handle.h"
 #include "vr_ipc.h"
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -15,7 +17,7 @@ class vr_client
 public:
 	struct image
 	{
-		int fd = -1; // owned by the client
+		native_handle fd = no_handle; // owned by the client (Linux: fd, Windows: NT handle of the Vulkan memory)
 		ipc::image_desc desc{};
 	};
 
@@ -49,7 +51,12 @@ public:
 private:
 	vr_client() = default;
 	void drop_config();
-	int fd = -1;
+	native_handle fd = no_handle; // the connection: Unix socket / named pipe
+#ifdef _WIN32
+	struct win32_io;
+	std::unique_ptr<win32_io> io;
+	bool send_message(const void * data, size_t size) const;
+#endif
 	ipc::config_msg config_{};
 	std::vector<image> images;
 	std::vector<bool> busy;

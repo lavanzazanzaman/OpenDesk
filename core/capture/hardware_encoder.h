@@ -5,6 +5,7 @@
 #pragma once
 
 #include "bytes.h"
+#include "native_handle.h"
 #include "video.h"
 
 #include <functional>
@@ -45,8 +46,8 @@ struct encoder_config
 
 struct captured_frame
 {
-	// DMA-BUF (fd >= 0) or CPU memory (data != nullptr)
-	int fd = -1;
+	// DMA-BUF / Vulkan memory (fd: an fd on Linux, an NT handle on Windows) or CPU memory (data != nullptr)
+	native_handle fd = no_handle;
 	uint32_t drm_format = 0; // DRM fourcc, e.g. XRGB8888
 	uint64_t modifier = 0;
 	uint32_t offset = 0, stride = 0;
@@ -99,9 +100,11 @@ private:
 	void note(const std::string & line);
 	encoder_config cfg;
 #ifdef _WIN32
-	// Windows: BGRA frames from DXGI Desktop Duplication -> swscale NV12 -> the first working hardware encoder
-	// (NVENC / AMF / QSV) or Media Foundation / libx264 / libx265.
+	// Windows: BGRA frames from DXGI Desktop Duplication or NV12/P010 VR frames (Vulkan memory from the runtime) on the
+	// GPU named by cfg.render_node -> the first working hardware encoder (NVENC / AMF / QSV) or Media Foundation /
+	// libx264 / libx265. NVENC takes VR frames straight from the Vulkan memory through CUDA; the others get a GPU readback.
 	void setup(const captured_frame &);
+	void open_codec(AVPixelFormat input, AVBufferRef * frames);
 	void convert(const captured_frame &);
 	void send_frame(bool force_idr, const au_callback &);
 	const AVCodec * codec_def = nullptr;
@@ -112,7 +115,13 @@ private:
 	SwsContext * sws = nullptr;
 	int src_width = 0, src_height = 0, src_stride = 0;
 	AVPixelFormat src_format = AV_PIX_FMT_NONE;
+	bool src_opaque = false;
 	int64_t pts = 0;
+	AVBufferRef * hw_device = nullptr; // D3D11 device on the chosen adapter (picks the GPU for NVENC / AMF / QSV)
+	struct cuda_state;                 // NVENC: the runtime's Vulkan memory imported into CUDA, encoded in place
+	std::unique_ptr<cuda_state> cuda;
+	bool cuda_input = false, cuda_failed = false;
+	std::unique_ptr<opaque_buffer_reader> opaque; // the other encoders: a readback of the Vulkan memory
 #else
 	void setup_filters(const captured_frame &);
 	void encode_nv12(AVFrame *, bool force_idr, const au_callback &);

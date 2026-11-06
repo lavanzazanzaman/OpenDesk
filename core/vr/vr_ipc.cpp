@@ -1,6 +1,8 @@
+#ifndef _WIN32 // vr_ipc_win.cpp on Windows
 #include "vr_ipc.h"
 
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <string>
 #include <sys/socket.h>
@@ -8,6 +10,13 @@
 
 namespace od
 {
+int64_t ipc::monotonic_ns()
+{
+	timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+}
+
 std::string ipc::socket_path()
 {
 	const char * runtime = getenv("XDG_RUNTIME_DIR");
@@ -39,3 +48,4 @@ bool ipc::service_available()
 	return false;
 }
 } // namespace od
+#endif

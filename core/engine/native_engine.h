@@ -111,9 +111,7 @@ private:
 	void update_monitor_flags(int display_count);
 	void schedule_video_restart(int delay_ms);
 	void start_vr(bool force);
-#ifndef _WIN32
 	struct vr_stream_params vr_params(session *) const;
-#endif
 	void stop_video_source(session *);
 	static bool vr_test_pattern();
 	bool vr_available() const; // VR enabled and an OpenXR app has a session (HasVR)
@@ -162,16 +160,14 @@ private:
 	QTcpServer * video_server = nullptr;
 	QTcpServer * audio_server = nullptr;
 	std::unique_ptr<class pulse_client> pulse; // declared before `current`: sessions restore audio routing through it
-#ifndef _WIN32
 	std::unique_ptr<class vr_server> vr; // before `current`: sessions' senders unregister from it
-#endif
 	std::unique_ptr<class face_tracking> face; // headset face/eye tracking -> VRChat (OSC)
 	QString vr_app;
 	bool vr_app_rendered = false; // the connected app rendered (the headset may be showing it)
 	bool vr_linger = false; // an app just quit: stay in VR briefly in case the next one (the real game) follows
 	qint64 vr_wait_until_ms = 0; // a game launched from the headset: its first frame expected until then
 	bool game_launch_pending() const;
-	bool runtime_registered = false;
+	bool runtime_registered = false, runtime_pending_logged = false;
 	bool openvr_registered = false, openvr_warned = false, xrizer_fetch_started = false;
 	float vr_haptics[2] = {0, 0};
 	std::vector<game_entry> games;             // last scan

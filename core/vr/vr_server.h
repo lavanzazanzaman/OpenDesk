@@ -60,24 +60,18 @@ public:
 	// the connected app renders (announced it or submitted a frame). Probing clients - Proton's launcher shim, WineOpenXR's
 	// test instance, RiftLift's headless sessions - connect and leave without ever submitting.
 	bool rendering() const { return has_client() && submitted.load(); }
-	int client_pid() const { return has_client() ? peer_pid.load() : 0; } // in our pid namespace (SO_PEERCRED)
+	int client_pid() const { return has_client() ? peer_pid.load() : 0; } // in our pid namespace (SO_PEERCRED; Windows: the pipe client)
 
 private:
 	std::string render_node;
 	void run();
-	void send_config(int fd); // server thread (or under mutex)
 	void write_begin();
 	void write_end();
 
 	callbacks cb;
-	gbm_allocator alloc;
-	std::unique_ptr<vk_buffer_pool> vk_pool; // NVIDIA: OPAQUE_FD buffers instead of GBM images (vk_buffers.h)
-	int listen_fd = -1;
-	int abstract_fd = -1; // same service for containerized apps (ipc::abstract_name)
-	int memfd = -1;
+	std::unique_ptr<vk_buffer_pool> vk_pool; // NVIDIA (Windows: every GPU): exportable Vulkan memory (vk_buffers.h)
 	ipc::shared_state * state = nullptr;
-	int wake_pipe[2] = {-1, -1};
-	std::atomic<int> client_fd{-1};
+	std::atomic<int> client_fd{-1}; // the selected client (Windows: its connection id)
 	std::atomic<int> peer_pid{0};
 	std::atomic<bool> submitted{false};
 	std::atomic<bool> quit{false};
@@ -88,6 +82,23 @@ private:
 
 	std::mutex mutex; // pool, geometry, sink
 	using image_ptr = std::shared_ptr<dmabuf_image>; // the encoder may still hold a frame's images after a reconfiguration
+	uint32_t generation = 0;
+	int eye_w = 0, eye_h = 0, enc_w = 0, enc_h = 0, fps = 72;
+	bool ten_bit = false, full_range = false;
+	int fovea_w = 0, fovea_h = 0;
+	std::atomic<bool> config_dirty{false};
+	std::shared_ptr<frame_sink> sink;
+	void wake(char reason); // 'c' configuration, 'q' quit
+#ifdef _WIN32
+	struct win32; // vr_server_win.cpp: pipe instances, peers, the tracking section
+	std::unique_ptr<win32> w;
+#else
+	void send_config(int fd); // server thread (or under mutex)
+	gbm_allocator alloc;
+	int listen_fd = -1;
+	int abstract_fd = -1; // same service for containerized apps (ipc::abstract_name)
+	int memfd = -1;
+	int wake_pipe[2] = {-1, -1};
 	struct peer { std::string app; int pid = 0; std::vector<image_ptr> pool; int log_lines = 0; uint64_t serial = 0; };
 	uint64_t next_peer_serial = 0;
 	// slots the sink finished with, released to their app from the server thread (wake_pipe 'r')
@@ -101,12 +112,7 @@ private:
 	};
 	std::shared_ptr<release_queue> releases = std::make_shared<release_queue>();
 	std::map<int, peer> peers; // server thread only; separate buffers prevent cross-client writes
-	uint32_t generation = 0;
-	int eye_w = 0, eye_h = 0, enc_w = 0, enc_h = 0, fps = 72;
-	bool ten_bit = false, full_range = false;
-	int fovea_w = 0, fovea_h = 0;
-	std::atomic<bool> config_dirty{false};
-	std::shared_ptr<frame_sink> sink;
+#endif
 	std::thread thread;
 };
 } // namespace od

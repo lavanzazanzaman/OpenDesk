@@ -17,6 +17,13 @@ if(WIN32)
     # VAAPI encoder are Linux-only and are not built here.
     find_package(Qt6 6.4 REQUIRED COMPONENTS Gui Network)
     find_package(PkgConfig REQUIRED)
+    find_package(Vulkan REQUIRED)
+
+    # VR runtime client side (no Qt): used by libovr-opendesk inside OpenXR apps
+    add_library(odvrclient STATIC vr/vr_ipc_win.cpp vr/vr_ipc.h vr/vr_client_win.cpp vr/vr_client.h vr/frame_data.h vr/vr_types.h)
+    target_include_directories(odvrclient PUBLIC vr engine proto)
+    target_compile_definitions(odvrclient PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_libraries(odvrclient PUBLIC advapi32)
     pkg_check_modules(LZ4 REQUIRED IMPORTED_TARGET liblz4)
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavcodec libavutil libavformat libavfilter libswscale libswresample)
 
@@ -39,19 +46,31 @@ if(WIN32)
         capture/win_capture.cpp capture/win_capture.h
         capture/displays_win.cpp capture/displays_win.h
         capture/desktop_video.cpp capture/desktop_video.h
+        capture/win_gpu.cpp capture/win_gpu.h
         vr/vr_types.cpp vr/vr_types.h
+        vr/native_handle.h vr/vk_buffers.cpp vr/vk_buffers.h
+        vr/vr_ipc_win.cpp vr/vr_ipc.h
+        vr/vr_server_win.cpp vr/vr_server_state.cpp vr/vr_server.h
+        vr/vr_sender.cpp vr/vr_sender.h
+        vr/runtime_registration_win.cpp vr/runtime_registration.h
     )
     target_include_directories(odengine PUBLIC engine capture proto vr)
     target_compile_definitions(odengine PRIVATE
         NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00
         OPENDESK_RUNTIME_DIR="${CMAKE_BINARY_DIR}/runtime"
         OPENDESK_TOOLS_DIR="${CMAKE_SOURCE_DIR}/tools")
-    target_link_libraries(odengine PUBLIC odproto Qt6::Gui Qt6::Network
-        PRIVATE PkgConfig::LZ4 PkgConfig::FFMPEG
-        d3d11 dxgi ole32 oleaut32 uuid winmm iphlpapi ws2_32 ksguid)
+    target_link_libraries(odengine PUBLIC odproto odvrclient Qt6::Gui Qt6::Network
+        PRIVATE PkgConfig::LZ4 PkgConfig::FFMPEG Vulkan::Vulkan
+        d3d11 dxgi ole32 oleaut32 uuid winmm iphlpapi ws2_32 ksguid advapi32)
     set_target_properties(odengine PROPERTIES AUTOMOC ON)
 
-    # The tests exercise the Linux capture/VR stack and are not part of the Windows build.
+    # VR IPC round trip against the real server (no headset, no GPU frames needed)
+    add_executable(vr-test-client tests/vr_test_client.cpp)
+    target_link_libraries(vr-test-client PRIVATE odengine)
+    add_executable(vr-server-test tests/vr_server_test.cpp)
+    target_link_libraries(vr-server-test PRIVATE odengine)
+
+    # The other tests exercise the Linux capture stack and are not part of the Windows build.
     return()
 endif()
 
@@ -113,7 +132,7 @@ qt_add_library(odengine STATIC
     vr/dmabuf.cpp vr/dmabuf.h vr/vk_buffers.cpp vr/vk_buffers.h
     vr/test_pattern.cpp vr/test_pattern.h
     vr/vr_sender.cpp vr/vr_sender.h
-    vr/vr_server.cpp vr/vr_server.h
+    vr/vr_server.cpp vr/vr_server_state.cpp vr/vr_server.h
     vr/runtime_registration.cpp vr/runtime_registration.h
     capture/portal.cpp capture/portal.h
     capture/pipewire_capture.cpp capture/pipewire_capture.h
