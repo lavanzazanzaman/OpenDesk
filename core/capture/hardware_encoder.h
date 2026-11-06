@@ -58,6 +58,11 @@ struct captured_frame
 	uint64_t buffer_id = 0;     // identifies the allocation behind fd (imports are cached by it)
 	uint32_t uv_offset = 0;     // two-plane formats (NV12/P010): chroma plane offset
 	uint64_t buffer_bytes = 0;  // opaque buffers: the exporter's VkBuffer size
+#ifdef _WIN32
+	// Windows desktop capture on the GPU: a BGRA ID3D11Texture2D on this ID3D11Device (valid during the call)
+	void * d3d11_device = nullptr;
+	void * d3d11_texture = nullptr;
+#endif
 };
 
 class opaque_buffer_reader;
@@ -122,6 +127,17 @@ private:
 	std::unique_ptr<cuda_state> cuda;
 	bool cuda_input = false, cuda_failed = false;
 	std::unique_ptr<opaque_buffer_reader> opaque; // the other encoders: a readback of the Vulkan memory
+	struct d3d11_state; // desktop frames on the GPU: video processor BGRA -> NV12/P010 into D3D11 encoder frames
+	std::unique_ptr<d3d11_state> d3d;
+	bool d3d_input = false, d3d_failed = false;
+	void setup_d3d11(const captured_frame &);
+	const uint8_t * read_texture(const captured_frame &, int & stride); // fallback: the texture on the CPU
+	// VR frames for AMF / Media Foundation: a GPU copy from the runtime's Vulkan memory into D3D11 frames (no CPU copy)
+	std::unique_ptr<class opaque_buffer_copier> copier;
+	AVBufferRef * copy_device = nullptr;
+	AVBufferRef * copy_frames = nullptr;
+	bool copy_input = false, copy_failed = false;
+	void setup_vr_d3d11(AVPixelFormat sw_format);
 #else
 	void setup_filters(const captured_frame &);
 	void encode_nv12(AVFrame *, bool force_idr, const au_callback &);

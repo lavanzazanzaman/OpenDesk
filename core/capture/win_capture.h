@@ -1,4 +1,6 @@
-// DXGI Desktop Duplication capture for one monitor.
+// DXGI Desktop Duplication capture for one monitor, on the GPU: each frame is copied into a texture of our own on the
+// monitor's adapter, the cursor drawn into it, and handed to the encoder as a D3D11 texture (captured_frame::d3d11_*),
+// which converts it with the video processor - no trip through system memory.
 #pragma once
 
 #include "hardware_encoder.h" // captured_frame
@@ -27,7 +29,10 @@ private:
 	void run();
 	bool open();
 	void close();
-	bool grab_pointer(void * mapped, int stride, int width, int height, int x, int y);
+	void update_cursor_shape();
+	void draw_cursor();
+	bool cursor_visible = false;
+	int cursor_x = 0, cursor_y = 0;
 
 	std::string device;
 	int fps;

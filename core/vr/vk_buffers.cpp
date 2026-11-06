@@ -139,6 +139,14 @@ struct gpu
 		qci.pQueuePriorities = &priority;
 		const char * ext[] = {external_memory_extension};
 		VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+#ifdef _WIN32
+		// NV12/P010 images (the encoder's D3D11 frame pool, opaque_buffer_copier): multi-planar formats
+		VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES};
+		VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &ycbcr};
+		vkGetPhysicalDeviceFeatures2(physical, &supported);
+		if (ycbcr.samplerYcbcrConversion)
+			dci.pNext = &ycbcr;
+#endif
 		dci.queueCreateInfoCount = 1;
 		dci.pQueueCreateInfos = &qci;
 		dci.enabledExtensionCount = 1;
@@ -411,6 +419,169 @@ const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint
 	vkWaitForFences(p->device, 1, &p->fence, VK_TRUE, UINT64_MAX);
 	return static_cast<const uint8_t *>(p->mapped);
 }
+
+#ifdef _WIN32
+struct opaque_buffer_copier::impl : gpu
+{
+	using gpu::gpu;
+	VkImage image = VK_NULL_HANDLE; // the D3D11 texture array
+	VkDeviceMemory image_memory = VK_NULL_HANDLE;
+	struct imported
+	{
+		VkBuffer buffer = VK_NULL_HANDLE;
+		VkDeviceMemory memory = VK_NULL_HANDLE;
+	};
+	std::map<uint64_t, imported> buffers; // by dmabuf_image::id
+	VkCommandPool pool = VK_NULL_HANDLE;
+	VkCommandBuffer cmd = VK_NULL_HANDLE;
+	VkFence fence = VK_NULL_HANDLE;
+	uint32_t width = 0, height = 0, layers = 0;
+	bool ten_bit = false;
+
+	void drop(imported & b)
+	{
+		vkDestroyBuffer(device, b.buffer, nullptr);
+		vkFreeMemory(device, b.memory, nullptr);
+	}
+	~impl()
+	{
+		vkDeviceWaitIdle(device);
+		for (auto & [id, b]: buffers)
+			drop(b);
+		vkDestroyImage(device, image, nullptr);
+		vkFreeMemory(device, image_memory, nullptr);
+		vkDestroyFence(device, fence, nullptr);
+		vkDestroyCommandPool(device, pool, nullptr);
+	}
+};
+
+opaque_buffer_copier::opaque_buffer_copier(const std::string & node, void * texture, uint32_t w, uint32_t h, uint32_t layers, bool ten_bit) :
+        p(std::make_unique<impl>(node))
+{
+	p->width = w;
+	p->height = h;
+	p->layers = layers;
+	p->ten_bit = ten_bit;
+	// the encoder's D3D11 frame pool as a Vulkan image (same memory)
+	VkExternalMemoryImageCreateInfo ext{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+	ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &ext};
+	ici.imageType = VK_IMAGE_TYPE_2D;
+	ici.format = ten_bit ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+	ici.extent = {w, h, 1};
+	ici.mipLevels = 1;
+	ici.arrayLayers = layers;
+	ici.samples = VK_SAMPLE_COUNT_1_BIT;
+	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	check(vkCreateImage(p->device, &ici, nullptr, &p->image), "vkCreateImage(D3D11 frame pool)");
+	VkMemoryRequirements req;
+	vkGetImageMemoryRequirements(p->device, p->image, &req);
+	VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
+	imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+	imp.handle = texture;
+	VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imp};
+	ded.image = p->image;
+	VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
+	mai.allocationSize = req.size;
+	mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	check(vkAllocateMemory(p->device, &mai, nullptr, &p->image_memory), "import the D3D11 frame pool");
+	check(vkBindImageMemory(p->device, p->image, p->image_memory, 0), "vkBindImageMemory(D3D11 frame pool)");
+	VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+	pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+	pci.queueFamilyIndex = p->family;
+	check(vkCreateCommandPool(p->device, &pci, nullptr, &p->pool), "vkCreateCommandPool");
+	VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+	cai.commandPool = p->pool;
+	cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	cai.commandBufferCount = 1;
+	check(vkAllocateCommandBuffers(p->device, &cai, &p->cmd), "vkAllocateCommandBuffers");
+	VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+	check(vkCreateFence(p->device, &fci, nullptr, &p->fence), "vkCreateFence");
+}
+
+opaque_buffer_copier::~opaque_buffer_copier() = default;
+
+void opaque_buffer_copier::copy(native_handle memory, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id, uint32_t stride,
+                                uint32_t uv_offset, uint32_t layer)
+{
+	auto it = p->buffers.find(buffer_id);
+	if (it == p->buffers.end() && p->buffers.size() >= 12) // the runtime's pool was replaced
+	{
+		vkDeviceWaitIdle(p->device);
+		for (auto & [id, b]: p->buffers)
+			p->drop(b);
+		p->buffers.clear();
+	}
+	if (it == p->buffers.end())
+	{
+		impl::imported b;
+		b.buffer = create_buffer(p->device, buffer_bytes, ipc::opaque_buffer_usage); // identical to the exporter's
+		VkMemoryRequirements req;
+		vkGetBufferMemoryRequirements(p->device, b.buffer, &req);
+		VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
+		imp.handleType = external_handle_type;
+		imp.handle = memory;
+		VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imp};
+		ded.buffer = b.buffer;
+		VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
+		mai.allocationSize = size;
+		mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		if (VkResult r = vkAllocateMemory(p->device, &mai, nullptr, &b.memory); r != VK_SUCCESS)
+		{
+			vkDestroyBuffer(p->device, b.buffer, nullptr);
+			check(r, "vkAllocateMemory(import VR buffer)");
+		}
+		vkBindBufferMemory(p->device, b.buffer, b.memory, 0);
+		it = p->buffers.emplace(buffer_id, b).first;
+	}
+	vkResetCommandBuffer(p->cmd, 0);
+	VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+	bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(p->cmd, &bi);
+	VkBufferMemoryBarrier acquire{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+	acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+	acquire.dstQueueFamilyIndex = p->family;
+	acquire.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	acquire.buffer = it->second.buffer;
+	acquire.size = VK_WHOLE_SIZE;
+	VkImageMemoryBarrier to_dst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+	to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // the slice is fully rewritten
+	to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	to_dst.srcQueueFamilyIndex = to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	to_dst.image = p->image;
+	to_dst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, layer, 1};
+	vkCmdPipelineBarrier(p->cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1, &acquire, 1, &to_dst);
+	const uint32_t sample = p->ten_bit ? 2 : 1; // bytes per luma sample
+	VkBufferImageCopy regions[2]{};
+	regions[0].bufferOffset = 0;
+	regions[0].bufferRowLength = stride / sample;
+	regions[0].imageSubresource = {VK_IMAGE_ASPECT_PLANE_0_BIT, 0, layer, 1};
+	regions[0].imageExtent = {p->width, p->height, 1};
+	regions[1].bufferOffset = uv_offset;
+	regions[1].bufferRowLength = stride / (2 * sample); // interleaved CbCr texels
+	regions[1].imageSubresource = {VK_IMAGE_ASPECT_PLANE_1_BIT, 0, layer, 1};
+	regions[1].imageExtent = {p->width / 2, p->height / 2, 1};
+	vkCmdCopyBufferToImage(p->cmd, it->second.buffer, p->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, regions);
+	VkImageMemoryBarrier release = to_dst; // to D3D11 (the encoder) next
+	release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+	release.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	release.dstAccessMask = 0;
+	release.srcQueueFamilyIndex = p->family;
+	release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+	vkCmdPipelineBarrier(p->cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &release);
+	vkEndCommandBuffer(p->cmd);
+	VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+	si.commandBufferCount = 1;
+	si.pCommandBuffers = &p->cmd;
+	vkResetFences(p->device, 1, &p->fence);
+	check(vkQueueSubmit(p->queue, 1, &si, p->fence), "vkQueueSubmit(copy to the encoder)");
+	vkWaitForFences(p->device, 1, &p->fence, VK_TRUE, UINT64_MAX);
+}
+#endif
 } // namespace od
 
 static_assert(od::ipc::opaque_buffer_usage ==

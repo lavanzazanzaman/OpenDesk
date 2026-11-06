@@ -25,19 +25,25 @@ Test on both GPUs where possible (NVIDIA and AMD): the encoder paths differ.
       `[encode] ... 2-pass, AQ on <your GPU>` when enabled.
   - AMD: `h264_amf`/`hevc_amf` with 2-Pass/AQ on - image quality in dark scenes, no stutter.
   - NVIDIA: same with NVENC; no keyframe "pulsing" every 2 seconds anymore (intra refresh).
-- [ ] Laptop / two GPUs: the log names the GPU you expect.
+- [ ] Laptop / two GPUs: the log names the GPU you expect, and a monitor on the second GPU can be streamed.
+- [ ] Desktop frames stay on the GPU: the format line says `GPU (Desktop Duplication -> D3D11 video processor)`.
+      Check colours (no washed-out or crushed blacks in limited and full range), the mouse pointer (normal, text
+      cursor, resize arrows, a game's custom cursor), and CPU use compared to before.
 
 ## 2. OpenXR games (OpenDesk XR)
 
-- [ ] On first VR use without the installer: one UAC prompt to make OpenDesk XR the OpenXR runtime; afterwards
-      System check → OpenXR runtime `[ok]`.
+- [ ] Installed with the installer: no UAC prompt at all. OpenDesk XR becomes the OpenXR runtime when the streamer
+      starts and the previous one comes back when it exits (check `HKLM\SOFTWARE\Khronos\OpenXR\1\ActiveRuntime`).
+      `opendesk-service.exe --call status` says `active` while the streamer runs.
+- [ ] Without the installer (copied folder): one UAC prompt; afterwards System check → OpenXR runtime `[ok]`.
+- [ ] Enable OpenDesk XR's mirror window: it shows the game's view (not black).
 - [ ] A **D3D11** OpenXR game (most Unity/Unreal titles): starts, headset switches to VR, image correct per eye
       (no swapped/mirrored eyes), head tracking, controllers, haptics, recenter.
 - [ ] A **D3D12** OpenXR game.
 - [ ] An **OpenGL** and a **Vulkan** OpenXR game if you have one.
 - [ ] Streamer log while playing: `[vr-ipc] OpenXR app connected`, `6 buffers ... OPAQUE_WIN32`, and the encoder line:
   - NVIDIA: `CUDA input` (zero copy)
-  - AMD: `GPU readback` (works; slower path - note the frame times)
+  - AMD: `GPU copy into D3D11 frames` (if it says `GPU readback`, send the log: the GPU copy didn't work there)
 - [ ] Settings on the VR page apply: FOV tangents, render resolution, sharpening, FOV stencil.
 - [ ] Synchronous Spacewarp (headset setting) on/off.
 - [ ] Eye-tracked headset (Quest Pro): foveated streaming, eye/face tracking in a game that uses it; VRChat face
@@ -75,6 +81,12 @@ Test on both GPUs where possible (NVIDIA and AMD): the encoder paths differ.
       shows it.
 - [ ] In the headset: Add monitor / Remove monitor, Extra display, portrait toggle.
 - [ ] After disconnecting, the driver's monitor count is back to what it was.
+- [ ] The streamer stays responsive while a monitor is added (the headset keeps streaming, then the new screen joins).
+
+## 6. Crash reports
+
+- [ ] `OPENDESK_TEST_CRASH=1` before starting OpenDesk.exe: it crashes on purpose; `streamer.log` ends with
+      `--- crash: exception 0xc0000005` and a stack, and `streamer-crash.dmp` is next to it.
 
 ## Known gaps
 

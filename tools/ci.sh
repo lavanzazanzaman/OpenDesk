@@ -163,6 +163,43 @@ windows_xrizer() {
 	LLVM_MINGW=$LLVM_MINGW OPENDESK_WIN_SYSROOT=$SYSROOT bash "$ROOT/tools/windows/build-xrizer.sh" "$XRIZER_SRC" "$CI/xrizer-win"
 }
 
+# the crash report: OPENDESK_TEST_CRASH makes the streamer crash on purpose; streamer.log must hold a stack
+windows_crash() {
+	wine_env
+	local log="$WINEPREFIX/drive_c/users/$USER/AppData/Local/cache/OpenDesk"
+	rm -f "$log/streamer-crash.dmp"
+	: >"$log/streamer.log" 2>/dev/null || mkdir -p "$log"
+	OPENDESK_TEST_CRASH=1 WINEPATH="$WINEPATH" timeout 60 wine "$CI/windows/streamer/opendesk-streamer.exe" >/dev/null 2>&1
+	grep -A3 -- '--- crash' "$log/streamer.log" && [ -s "$log/streamer-crash.dmp" ]
+}
+
+# OpenDesk Service: switches the OpenXR runtime to the manifest next to it and back, refuses anything else
+windows_service() {
+	wine_env
+	local dir=$CI/service-test
+	mkdir -p "$dir/runtime"
+	cp "$CI/windows/streamer/opendesk-service.exe" "$dir/"
+	echo '{}' >"$dir/runtime/opendesk_xr.json"
+	local saved
+	saved=$(wine reg query 'HKLM\SOFTWARE\Khronos\OpenXR\1' /v ActiveRuntime /reg:64 2>/dev/null | awk '/ActiveRuntime/ {print $3}')
+	wine reg add 'HKLM\SOFTWARE\Khronos\OpenXR\1' /v ActiveRuntime /t REG_SZ /d 'C:\other\runtime.json' /f /reg:64 >/dev/null 2>&1
+	wine "$dir/opendesk-service.exe" --console >/dev/null 2>&1 &
+	local service=$!
+	sleep 4
+	local ok=1 r
+	call() { wine "$dir/opendesk-service.exe" --call "$1" 2>/dev/null | tr -d '\r'; }
+	r=$(call openxr-activate); echo "openxr-activate -> $r"; [ "$r" = ok ] || ok=0
+	r=$(call status); echo "status -> $r"; [ "$r" = active ] || ok=0
+	r=$(call openxr-restore); echo "openxr-restore -> $r"; [ "$r" = ok ] || ok=0
+	r=$(wine reg query 'HKLM\SOFTWARE\Khronos\OpenXR\1' /v ActiveRuntime /reg:64 2>/dev/null | tr -d '\r' | awk '/ActiveRuntime/ {print $3}')
+	echo "restored -> $r"; [ "$r" = 'C:\other\runtime.json' ] || ok=0
+	r=$(call 'openxr-activate C:\evil.json'); echo "injected path -> $r"; [ "${r#error}" != "$r" ] || ok=0
+	kill $service 2>/dev/null
+	wineserver -k 2>/dev/null
+	[ -n "$saved" ] && wine reg add 'HKLM\SOFTWARE\Khronos\OpenXR\1' /v ActiveRuntime /t REG_SZ /d "$saved" /f /reg:64 >/dev/null 2>&1
+	[ $ok = 1 ]
+}
+
 run_windows() {
 	step windows-sysroot windows_sysroot
 	step windows-build windows_build
@@ -177,6 +214,8 @@ run_windows() {
 	fi
 	step windows-ipc-wine windows_ipc
 	step windows-openxr-wine windows_openxr
+	step windows-service-wine windows_service
+	step windows-crash-wine windows_crash
 }
 
 # ---------------------------------------------------------------------------------------------------------------------

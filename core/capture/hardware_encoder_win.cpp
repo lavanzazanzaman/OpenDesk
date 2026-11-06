@@ -18,12 +18,14 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
+#include <libavutil/hwcontext_d3d11va.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libswscale/swscale.h>
 }
 
 #include <windows.h>
+#include <d3d11_1.h>
 #include <dxgi.h>
 
 #include <algorithm>
@@ -347,6 +349,128 @@ struct hardware_encoder::cuda_state
 	}
 };
 
+// Desktop frames that stay on the GPU: the capture's BGRA texture -> D3D11 video processor -> an NV12/P010 frame of a
+// D3D11 frames pool on the same device, which NVENC / AMF / Media Foundation encode directly
+struct hardware_encoder::d3d11_state
+{
+	ID3D11Device * device = nullptr;
+	ID3D11DeviceContext * context = nullptr;
+	ID3D11VideoDevice * video = nullptr;
+	ID3D11VideoContext * video_context = nullptr;
+	ID3D11VideoProcessorEnumerator * enumerator = nullptr;
+	ID3D11VideoProcessor * processor = nullptr;
+	AVBufferRef * hw_device = nullptr;
+	AVBufferRef * frames = nullptr;
+	std::map<void *, ID3D11VideoProcessorInputView *> inputs;
+	std::map<std::pair<void *, intptr_t>, ID3D11VideoProcessorOutputView *> outputs;
+
+	d3d11_state(ID3D11Device * dev, int width, int height, AVPixelFormat sw_format, bool full_range) :
+	        device(dev)
+	{
+		device->AddRef();
+		device->GetImmediateContext(&context);
+		if (FAILED(device->QueryInterface(__uuidof(ID3D11VideoDevice), reinterpret_cast<void **>(&video))) ||
+		    FAILED(context->QueryInterface(__uuidof(ID3D11VideoContext), reinterpret_cast<void **>(&video_context))))
+			throw std::runtime_error("the capture device has no video processor");
+		D3D11_VIDEO_PROCESSOR_CONTENT_DESC cd{};
+		cd.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+		cd.InputWidth = cd.OutputWidth = UINT(width);
+		cd.InputHeight = cd.OutputHeight = UINT(height);
+		cd.InputFrameRate = cd.OutputFrameRate = {60, 1};
+		cd.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
+		if (FAILED(video->CreateVideoProcessorEnumerator(&cd, &enumerator)) || FAILED(video->CreateVideoProcessor(enumerator, 0, &processor)))
+			throw std::runtime_error("cannot create a D3D11 video processor");
+		// RGB (full range) in, BT.709 YCbCr in the stream's range out
+		ID3D11VideoContext1 * vc1 = nullptr;
+		if (SUCCEEDED(video_context->QueryInterface(__uuidof(ID3D11VideoContext1), reinterpret_cast<void **>(&vc1))))
+		{
+			vc1->VideoProcessorSetStreamColorSpace1(processor, 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+			vc1->VideoProcessorSetOutputColorSpace1(processor, full_range ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709
+			                                                              : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
+			vc1->Release();
+		}
+		else
+		{
+			D3D11_VIDEO_PROCESSOR_COLOR_SPACE in{}, out{};
+			in.RGB_Range = 0; // full
+			out.YCbCr_Matrix = 1; // BT.709
+			out.Nominal_Range = full_range ? D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255 : D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
+			video_context->VideoProcessorSetStreamColorSpace(processor, 0, &in);
+			video_context->VideoProcessorSetOutputColorSpace(processor, &out);
+		}
+		video_context->VideoProcessorSetStreamAutoProcessingMode(processor, 0, FALSE);
+		hw_device = av_hwdevice_ctx_alloc(AV_HWDEVICE_TYPE_D3D11VA);
+		auto * dc = static_cast<AVD3D11VADeviceContext *>(reinterpret_cast<AVHWDeviceContext *>(hw_device->data)->hwctx);
+		dc->device = device;
+		device->AddRef(); // FFmpeg releases its reference
+		check(av_hwdevice_ctx_init(hw_device), "D3D11 device");
+		frames = av_hwframe_ctx_alloc(hw_device);
+		auto * fc = reinterpret_cast<AVHWFramesContext *>(frames->data);
+		fc->format = AV_PIX_FMT_D3D11;
+		fc->sw_format = sw_format;
+		fc->width = width;
+		fc->height = height;
+		fc->initial_pool_size = 8;
+		static_cast<AVD3D11VAFramesContext *>(fc->hwctx)->BindFlags = D3D11_BIND_RENDER_TARGET; // video processor output
+		check(av_hwframe_ctx_init(frames), "D3D11 frames");
+	}
+
+	~d3d11_state()
+	{
+		for (auto & [k, v]: inputs)
+			v->Release();
+		for (auto & [k, v]: outputs)
+			v->Release();
+		av_buffer_unref(&frames);
+		av_buffer_unref(&hw_device);
+		if (processor)
+			processor->Release();
+		if (enumerator)
+			enumerator->Release();
+		if (video_context)
+			video_context->Release();
+		if (video)
+			video->Release();
+		if (context)
+			context->Release();
+		device->Release();
+	}
+
+	// texture (BGRA) -> a new frame of the pool
+	AVFrame * convert(ID3D11Texture2D * texture)
+	{
+		AVFrame * out = av_frame_alloc();
+		check(av_hwframe_get_buffer(frames, out, 0), "D3D11 frame");
+		auto * target = reinterpret_cast<ID3D11Texture2D *>(out->data[0]);
+		const intptr_t slice = reinterpret_cast<intptr_t>(out->data[1]);
+		ID3D11VideoProcessorInputView *& in = inputs[texture];
+		if (!in)
+		{
+			D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC d{};
+			d.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+			check(SUCCEEDED(video->CreateVideoProcessorInputView(texture, enumerator, &d, &in)) ? 0 : AVERROR_EXTERNAL, "input view");
+		}
+		ID3D11VideoProcessorOutputView *& view = outputs[{target, slice}];
+		if (!view)
+		{
+			D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC d{};
+			d.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2DARRAY;
+			d.Texture2DArray.FirstArraySlice = UINT(slice);
+			d.Texture2DArray.ArraySize = 1;
+			check(SUCCEEDED(video->CreateVideoProcessorOutputView(target, enumerator, &d, &view)) ? 0 : AVERROR_EXTERNAL, "output view");
+		}
+		D3D11_VIDEO_PROCESSOR_STREAM stream{};
+		stream.Enable = TRUE;
+		stream.pInputSurface = in;
+		if (FAILED(video_context->VideoProcessorBlt(processor, view, 0, 1, &stream)))
+		{
+			av_frame_free(&out);
+			throw std::runtime_error("VideoProcessorBlt failed");
+		}
+		return out;
+	}
+};
+
 hardware_encoder::hardware_encoder(encoder_config c) :
         cfg(std::move(c))
 {
@@ -360,6 +484,10 @@ hardware_encoder::~hardware_encoder()
 	av_frame_free(&last);
 	avcodec_free_context(&codec);
 	cuda.reset();
+	d3d.reset();
+	copier.reset();
+	av_buffer_unref(&copy_frames);
+	av_buffer_unref(&copy_device);
 	av_buffer_unref(&hw_device);
 }
 
@@ -374,7 +502,9 @@ std::string hardware_encoder::input_path() const
 	if (!selected)
 		return "not initialized";
 	if (src_opaque)
-		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : "GPU readback");
+		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : copy_input ? "GPU copy into D3D11 frames" : "GPU readback");
+	if (d3d_input)
+		return std::format("{}, GPU (Desktop Duplication -> D3D11 video processor)", selected);
 	return std::format("{}, CPU (Desktop Duplication)", selected);
 }
 
@@ -394,8 +524,11 @@ void hardware_encoder::open_codec(AVPixelFormat input, AVBufferRef * frames)
 	std::string errors;
 	for (const auto & c: ordered_candidates(cfg.codec, vendor))
 	{
-		if (frames && std::strcmp(c.backend, "NVENC") != 0)
+		const bool d3d_frames = frames && reinterpret_cast<AVHWFramesContext *>(frames->data)->format == AV_PIX_FMT_D3D11;
+		if (frames && !d3d_frames && std::strcmp(c.backend, "NVENC") != 0)
 			continue; // CUDA frames: NVENC only
+		if (d3d_frames && (!c.hardware || std::strcmp(c.backend, "QSV") == 0))
+			continue; // D3D11 frames: NVENC, AMF, Media Foundation
 		const AVCodec * def = avcodec_find_encoder_by_name(c.name);
 		if (!def)
 			continue;
@@ -406,7 +539,7 @@ void hardware_encoder::open_codec(AVPixelFormat input, AVBufferRef * frames)
 		ctx->height = h;
 		ctx->time_base = {1, std::max(cfg.fps, 1)};
 		ctx->framerate = {std::max(cfg.fps, 1), 1};
-		ctx->pix_fmt = frames ? AV_PIX_FMT_CUDA : input;
+		ctx->pix_fmt = frames ? reinterpret_cast<AVHWFramesContext *>(frames->data)->format : input;
 		if (frames)
 			ctx->hw_frames_ctx = av_buffer_ref(frames);
 		else if (hw_device && c.hardware && std::strcmp(c.backend, "Media Foundation") != 0)
@@ -452,6 +585,30 @@ void hardware_encoder::setup(const captured_frame & f)
 	const int w = cfg.width, h = cfg.height;
 	if (w <= 0 || h <= 0)
 		throw std::runtime_error("invalid frame size");
+	if (f.d3d11_texture && !codec)
+	{
+		if (!d3d_failed)
+			try
+			{
+				setup_d3d11(f);
+				return;
+			}
+			catch (const std::exception & e)
+			{
+				note(std::string("[encoder] desktop frames on the GPU unavailable (") + e.what() + "): reading them back");
+				avcodec_free_context(&codec);
+				d3d.reset();
+				d3d_input = false;
+				d3d_failed = true;
+			}
+		captured_frame cpu = f; // the CPU path from here on
+		int stride = 0;
+		cpu.data = read_texture(f, stride);
+		cpu.stride = uint32_t(stride);
+		cpu.d3d11_texture = nullptr;
+		cpu.av_sw_format = AV_PIX_FMT_BGRA;
+		return setup(cpu);
+	}
 	if (!f.opaque_buffer && f.data == nullptr)
 		throw std::runtime_error("no frame memory");
 	const AVPixelFormat src = f.av_sw_format < 0 ? AV_PIX_FMT_BGRA : AVPixelFormat(f.av_sw_format);
@@ -492,6 +649,24 @@ void hardware_encoder::setup(const captured_frame & f)
 			cuda_failed = true;
 		}
 
+	// AMF / Media Foundation: a GPU copy into the encoder's D3D11 frames (NV12/P010 as the runtime wrote them)
+	if (f.opaque_buffer && !copy_failed && src == (is_10bit(cfg.codec) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12))
+		try
+		{
+			setup_vr_d3d11(dst);
+			copy_input = true;
+			return;
+		}
+		catch (const std::exception & e)
+		{
+			note(std::string("[encoder] GPU copy into D3D11 frames unavailable (") + e.what() + "): reading the frames back");
+			avcodec_free_context(&codec);
+			copier.reset();
+			av_buffer_unref(&copy_frames);
+			av_buffer_unref(&copy_device);
+			copy_failed = true;
+		}
+
 	// NV12/P010 in (VR readback): copied plane by plane when the format matches, else converted
 	if (src != dst || !f.uv_offset)
 	{
@@ -515,10 +690,121 @@ void hardware_encoder::setup(const captured_frame & f)
 	last->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 }
 
+void hardware_encoder::setup_vr_d3d11(AVPixelFormat sw_format)
+{
+	const auto gpu = win::adapter(cfg.render_node);
+	if (!gpu)
+		throw std::runtime_error("no adapter for " + cfg.render_node);
+	const int index = dxgi_index(gpu->luid);
+	check(av_hwdevice_ctx_create(&copy_device, AV_HWDEVICE_TYPE_D3D11VA, std::to_string(index).c_str(), nullptr, 0), "D3D11 device");
+	constexpr int pool = 8;
+	copy_frames = av_hwframe_ctx_alloc(copy_device);
+	auto * fc = reinterpret_cast<AVHWFramesContext *>(copy_frames->data);
+	fc->format = AV_PIX_FMT_D3D11;
+	fc->sw_format = sw_format;
+	fc->width = cfg.width;
+	fc->height = cfg.height;
+	fc->initial_pool_size = pool; // one texture array: shared with Vulkan as a whole
+	auto * hc = static_cast<AVD3D11VAFramesContext *>(fc->hwctx);
+	hc->BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	hc->MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+	check(av_hwframe_ctx_init(copy_frames), "D3D11 frames");
+	if (!hc->texture)
+		throw std::runtime_error("the D3D11 frame pool is not one texture array");
+	IDXGIResource1 * resource = nullptr;
+	HANDLE shared = nullptr;
+	const bool ok = SUCCEEDED(hc->texture->QueryInterface(__uuidof(IDXGIResource1), reinterpret_cast<void **>(&resource))) &&
+	                SUCCEEDED(resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &shared));
+	if (resource)
+		resource->Release();
+	if (!ok)
+		throw std::runtime_error("cannot share the D3D11 frame pool");
+	try
+	{
+		copier = std::make_unique<opaque_buffer_copier>(cfg.render_node, shared, uint32_t(cfg.width), uint32_t(cfg.height), uint32_t(pool),
+		                                                is_10bit(cfg.codec));
+	}
+	catch (...)
+	{
+		CloseHandle(shared);
+		throw;
+	}
+	CloseHandle(shared); // Vulkan imported it
+	open_codec(sw_format, copy_frames);
+}
+
+void hardware_encoder::setup_d3d11(const captured_frame & f)
+{
+	const AVPixelFormat dst = is_10bit(cfg.codec) ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12;
+	d3d = std::make_unique<d3d11_state>(static_cast<ID3D11Device *>(f.d3d11_device), cfg.width, cfg.height, dst, cfg.full_range);
+	open_codec(dst, d3d->frames);
+	d3d_input = true;
+	src_opaque = false;
+	src_format = AV_PIX_FMT_BGRA;
+	src_width = cfg.width;
+	src_height = cfg.height;
+	src_stride = 0;
+	pts = 0;
+}
+
+// the capture texture on the CPU (staging copy + map), for encoders that can't take D3D11 frames
+const uint8_t * hardware_encoder::read_texture(const captured_frame & f, int & stride)
+{
+	static thread_local std::vector<uint8_t> pixels;
+	auto * device = static_cast<ID3D11Device *>(f.d3d11_device);
+	auto * texture = static_cast<ID3D11Texture2D *>(f.d3d11_texture);
+	D3D11_TEXTURE2D_DESC desc{};
+	texture->GetDesc(&desc);
+	desc.Usage = D3D11_USAGE_STAGING;
+	desc.BindFlags = 0;
+	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	desc.MiscFlags = 0;
+	ID3D11Texture2D * staging = nullptr;
+	ID3D11DeviceContext * context = nullptr;
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, &staging)))
+		throw std::runtime_error("cannot read the captured frame back");
+	device->GetImmediateContext(&context);
+	context->CopyResource(staging, texture);
+	D3D11_MAPPED_SUBRESOURCE map{};
+	const HRESULT hr = context->Map(staging, 0, D3D11_MAP_READ, 0, &map);
+	if (SUCCEEDED(hr))
+	{
+		pixels.resize(size_t(map.RowPitch) * desc.Height);
+		std::memcpy(pixels.data(), map.pData, pixels.size());
+		stride = int(map.RowPitch);
+		context->Unmap(staging, 0);
+	}
+	context->Release();
+	staging->Release();
+	if (FAILED(hr))
+		throw std::runtime_error("cannot map the captured frame");
+	return pixels.data();
+}
+
 void hardware_encoder::convert(const captured_frame & frame)
 {
 	if (!codec)
 		setup(frame);
+	if (d3d_input)
+	{
+		if (!frame.d3d11_texture)
+			throw std::runtime_error("the encoder expects GPU frames");
+		AVFrame * out = d3d->convert(static_cast<ID3D11Texture2D *>(frame.d3d11_texture));
+		out->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+		av_frame_free(&last);
+		last = out;
+		return;
+	}
+	if (frame.d3d11_texture) // GPU frames, CPU encoder
+	{
+		captured_frame cpu = frame;
+		int stride = 0;
+		cpu.data = read_texture(frame, stride);
+		cpu.stride = uint32_t(stride);
+		cpu.d3d11_texture = nullptr;
+		cpu.av_sw_format = AV_PIX_FMT_BGRA;
+		return convert(cpu);
+	}
 	if (cuda_input)
 	{
 		if (!cuda->buffers.count(frame.buffer_id) && cuda->buffers.size() >= 12)
@@ -537,6 +823,17 @@ void hardware_encoder::convert(const captured_frame & frame)
 		in->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
 		av_frame_free(&last);
 		last = in;
+		return;
+	}
+	if (copy_input)
+	{
+		AVFrame * out = av_frame_alloc();
+		check(av_hwframe_get_buffer(copy_frames, out, 0), "D3D11 frame");
+		copier->copy(frame.fd, frame.size, frame.buffer_bytes, frame.buffer_id, frame.stride, frame.uv_offset,
+		             uint32_t(reinterpret_cast<intptr_t>(out->data[1])));
+		out->color_range = cfg.full_range ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
+		av_frame_free(&last);
+		last = out;
 		return;
 	}
 	const uint8_t * pixels = frame.data;
@@ -596,7 +893,7 @@ void hardware_encoder::send_frame(bool force_idr, const au_callback & cb)
 		throw std::runtime_error("encoder is not initialized");
 	AVFrame * frame = last;
 	AVFrame * clone = nullptr;
-	if (cuda_input) // the encoder may keep a reference while the runtime's buffer is reused: send a clone
+	if (cuda_input || d3d_input || copy_input) // hw frames: the encoder may hold on to one; send a reference, keep ours
 		frame = clone = av_frame_clone(last);
 	frame->pts = pts++;
 	if (force_idr)
