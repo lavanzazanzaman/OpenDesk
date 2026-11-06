@@ -30,6 +30,59 @@
 
 using namespace std::chrono_literals;
 
+#ifdef _WIN32
+// Windows (MinGW/clang cross-build): upstream's graphics core (D3D11, with D3D12 / OpenGL / Vulkan interop); the
+// streamer is reached through libovr-opendesk exactly like on Linux
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <unknwn.h>
+#include <wrl.h>
+#if !defined(_MSC_VER) && !defined(_MEMORY_)
+#define _MEMORY_ // libc++'s <memory> is in: WIL enables its STL-based types (shared_handle) on MSVC's guard macro only
+#endif
+#include <wil/registry.h>
+#include <wil/resource.h>
+#include <TlHelp32.h>
+#include <shlobj.h>
+#include "trace_compat.h"
+#include "win_hook.h" // DetourDllAttach without Detours (import table patching)
+
+using Microsoft::WRL::ComPtr;
+
+#include <d3d11_4.h>
+#ifndef D3D11_MIP_LOD_BIAS_MIN // missing from MinGW's d3d11.h
+#define D3D11_MIP_LOD_BIAS_MIN (-16.0f)
+#define D3D11_MIP_LOD_BIAS_MAX (15.99f)
+#endif
+#include <d3d12.h>
+#include <dxgi1_2.h>
+#define VK_USE_PLATFORM_WIN32_KHR
+#include <vulkan/vulkan.h>
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <GL/wglext.h>
+
+#include <OVR_CAPI.h>
+#include <OVR_CAPI_Audio.h>
+#include <OVR_CAPI_D3D.h>
+#include <OVR_CAPI_Vk.h>
+#include <OVR_Math.h>
+
+#include "OVR_Ext.h"
+
+#define XR_NO_PROTOTYPES
+#define XR_USE_PLATFORM_WIN32
+#define XR_USE_TIMESPEC
+#define XR_USE_GRAPHICS_API_D3D11
+#define XR_USE_GRAPHICS_API_D3D12
+#define XR_USE_GRAPHICS_API_VULKAN
+#define XR_USE_GRAPHICS_API_OPENGL
+#else
 #include "linux_compat.h"
 
 #include <vulkan/vulkan.h>
@@ -43,6 +96,7 @@ using namespace std::chrono_literals;
 #define XR_NO_PROTOTYPES
 #define XR_USE_TIMESPEC
 #define XR_USE_GRAPHICS_API_VULKAN
+#endif
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_reflection.h>
@@ -55,6 +109,7 @@ using namespace std::chrono_literals;
 
 // OpenXR utilities (OpenXR-MixedReality Shared/XrUtility; XrMath uses DirectXMath)
 #include <XrError.h>
+#ifndef _WIN32
 namespace xr::detail {
     // XrError.h only defines the HRESULT checks on Windows
     inline HRESULT _CheckHResult(HRESULT hr, const char* originator = nullptr, const char* sourceLocation = nullptr) {
@@ -65,6 +120,7 @@ namespace xr::detail {
         return hr;
     }
 } // namespace xr::detail
+#endif
 #include <XrMath.h>
 #include <XrSide.h>
 #include <XrStereoView.h>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage the Windows build for the NSIS installer. Run inside an MSYS2 MINGW64 shell after building:
+# Stage the Windows build for the NSIS installer. Run inside an MSYS2 CLANG64 shell after building:
 #   cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build-win
 #   tools/package-windows.sh <build-dir>
@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD=${1:-$ROOT/build-win}
 DEST=${OPENDESK_STAGE_DIR:-$ROOT/dist/OpenDesk}
-PREFIX=${MINGW_PREFIX:-/mingw64}
+PREFIX=${MINGW_PREFIX:-/clang64}
 
 rm -rf "$DEST"
 mkdir -p "$DEST"
@@ -54,6 +54,14 @@ for _ in 1 2 3 4 5 6; do
     done < <(find "$DEST" -type f \( -name '*.exe' -o -name '*.dll' \))
     [ "$changed" = 0 ] && break
 done
+
+# VR: OpenDesk XR + libovr-opendesk (self-contained: no C++ runtime DLLs) and, when built, xrizer for OpenVR games
+mkdir -p "$DEST/runtime"
+cp "$BUILD/runtime/opendesk-openxr.dll" "$BUILD/runtime/ovr-vd.dll" "$BUILD/runtime/opendesk_xr.json" "$DEST/runtime/"
+if [ -n "${OPENDESK_XRIZER_WIN:-}" ] && [ -f "$OPENDESK_XRIZER_WIN/bin/win64/vrclient_x64.dll" ]; then
+    mkdir -p "$DEST/xrizer"
+    cp -r "$OPENDESK_XRIZER_WIN/bin" "$DEST/xrizer/"
+fi
 
 # FFmpeg's encoders load no external DLLs, but the runtime side needs its data files when present.
 for d in "$PREFIX"/share/ffmpeg "$PREFIX"/share/opendesk; do

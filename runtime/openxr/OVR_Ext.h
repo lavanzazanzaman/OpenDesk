@@ -33,8 +33,7 @@ static constexpr int ovrLayerFlag_DisableRight = 0x200000;
 // Some values we add for 3rd party standalone runtimes based on VDXR.
 static constexpr int ovrControllerType_Index = 0x1000;
 
-#ifndef _WIN32
-// libovr-opendesk (Linux) extensions
+// libovr-opendesk extensions (Linux and Windows)
 static constexpr uint32_t ovrvd_FrameDataSize = 4992; // VirtualDesktop.Mobile.FrameData
 extern "C" ovrResult ovrvd_SetSynchronizationQueueFamilyVk(ovrSession session, uint32_t queueFamilyIndex);
 extern "C" ovrResult ovrvd_SetSessionPhysicalDeviceVk(ovrSession session, VkInstance instance, VkPhysicalDevice physicalDevice);
@@ -44,4 +43,3 @@ extern "C" ovrResult ovrvd_GetFrameData(ovrSession session, uint8_t* buffer, uin
 extern "C" bool ovrvd_GetBodySkeleton(ovrSession session, uint8_t* joints, uint32_t size, uint32_t* jointCount, int32_t* changedCount);
 // libovr-opendesk: a message for the streamer's log
 extern "C" void ovrvd_Log(const char* text);
-#endif

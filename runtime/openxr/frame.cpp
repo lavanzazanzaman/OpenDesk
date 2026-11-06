@@ -720,6 +720,9 @@ namespace opendesk_openxr {
             // libovr-opendesk: array slice per eye + alpha mode (see linux_graphics.cpp)
             layer.EyeFov.Header.Reserved[viewIndex] = (char)proj.views[viewIndex].subImage.imageArrayIndex;
             layer.EyeFov.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, proj.layerFlags);
+#else
+            // libovr-opendesk: the precompositor already fixed up alpha; only the bottom layer is opaque
+            layer.EyeFov.Header.Reserved[2] = (char)(m_precompositor.layerIndex == 0 ? 1 : 0);
 #endif
 
             if (!isValidSwapchainRect(xrSwapchain.ovrDesc, proj.views[viewIndex].subImage.imageRect)) {
@@ -931,6 +934,8 @@ namespace opendesk_openxr {
 #ifndef _WIN32
         layer.Quad.Header.Reserved[0] = layer.Quad.Header.Reserved[1] = (char)quad.subImage.imageArrayIndex;
         layer.Quad.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, quad.layerFlags);
+#else
+        layer.Quad.Header.Reserved[2] = (char)(m_precompositor.layerIndex == 0 ? 1 : 0);
 #endif
 
         if (!isValidSwapchainRect(xrSwapchain.ovrDesc, quad.subImage.imageRect)) {
@@ -1143,7 +1148,7 @@ namespace opendesk_openxr {
     void OpenXrRuntime::ensurePreprocessResources() {
 #ifdef _WIN32
         CHECK_HRCMD(m_ovrSubmissionDevice->CreateComputeShader(
-            g_AlphaBlendingCS, sizeof(g_AlphaBlendingCS), nullptr, m_alphaCorrectShader.ReleaseAndGetAddressOf()));
+            g_AlphaBlendingCS_blob().data(), g_AlphaBlendingCS_blob().size(), nullptr, m_alphaCorrectShader.ReleaseAndGetAddressOf()));
         setDebugName(m_alphaCorrectShader.Get(), "AlphaBlending CS");
         {
             D3D11_BUFFER_DESC desc{};

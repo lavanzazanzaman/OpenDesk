@@ -8,20 +8,7 @@
 #include <cstring>
 #include <strings.h>
 
-// --- ETW TraceLogging -> nothing (arguments are never evaluated)
-#define TRACELOGGING_DECLARE_PROVIDER(name) extern int name
-#define TRACELOGGING_DEFINE_PROVIDER(name, ...) int name = 0
-template <auto & provider>
-struct TraceLoggingActivity
-{
-};
-#define TraceLoggingWrite(...) ((void)0)
-#define TraceLoggingWriteStart(...) ((void)0)
-#define TraceLoggingWriteStop(...) ((void)0)
-#define TraceLoggingWriteTagged(...) ((void)0)
-#define TraceLoggingProviderEnabled(...) false
-#define TraceLoggingRegister(...) ((void)0)
-#define TraceLoggingUnregister(...) ((void)0)
+#include "trace_compat.h"
 
 // --- CRT / Win32 helpers
 #define _TRUNCATE ((size_t)-1)

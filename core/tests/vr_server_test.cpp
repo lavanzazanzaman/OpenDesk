@@ -1,6 +1,7 @@
 // Runs the VR server alone with a sink that only counts frames (no headset, no encoder): pairs with vr-test-client to
 // check the transport (Windows: named pipe + NT handles).
 //   vr-server-test [SECONDS]
+#include "hardware_encoder.h" // vr_render_node
 #include "vr_server.h"
 
 #include <atomic>
@@ -29,7 +30,7 @@ int main(int argc, char ** argv)
 	cb.log = [](std::string l) { std::printf("%s\n", l.c_str()); std::fflush(stdout); };
 	cb.client = [](bool connected, std::string app) { std::printf("client %s: %s\n", connected ? "selected" : "left", app.c_str()); };
 	auto sink = std::make_shared<counting_sink>();
-	vr_server server({}, cb);
+	vr_server server(vr_render_node(), cb);
 	server.set_sink(sink);
 	fov_port fov[2]{};
 	server.set_display(true, true, 0.064f, fov, 0);

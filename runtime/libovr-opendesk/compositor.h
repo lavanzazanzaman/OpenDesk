@@ -8,6 +8,11 @@
 // memory is exported as an opaque fd and imported into the private device (same driver, identical image parameters).
 // Per frame the images are released from the app's queue, composited, and handed back (queue family ownership via
 // VK_QUEUE_FAMILY_EXTERNAL).
+//
+// Windows: the same with OPAQUE_WIN32 NT handles, plus a Direct3D 11 mode for OpenDesk XR's D3D11 core (which also
+// carries D3D12, OpenGL and Vulkan apps): swapchain textures are shared D3D11 textures (NT handles) imported into the
+// private device, and a shared ID3D11Fence (a timeline semaphore on our side) orders the app's rendering, the
+// compositing and the app's next frame on the GPU.
 #pragma once
 
 #include "vr_client.h"
@@ -16,6 +21,15 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#define VK_USE_PLATFORM_WIN32_KHR
+struct ID3D11Device;
+struct ID3D11Device5;
+struct ID3D11DeviceContext4;
+struct ID3D11Fence;
+struct ID3D11Texture2D;
+#endif
 #include <vulkan/vulkan.h>
 
 namespace od::ovr
@@ -35,6 +49,11 @@ struct swapchain
 	std::vector<std::vector<VkImageView>> views; // [image][array layer] of `shared`
 	int current = 0;   // next index the app renders into
 	int committed = -1; // last committed index (what the compositor samples)
+#ifdef _WIN32
+	std::vector<ID3D11Texture2D *> textures; // D3D11 mode: what the app renders into (`shared` imports them)
+	uint32_t dxgi_format = 0;
+	uint32_t mip_levels = 1;
+#endif
 };
 
 struct composite_layer
@@ -68,6 +87,15 @@ class compositor
 public:
 	// the application's GPU objects (its session binding)
 	compositor(VkPhysicalDevice, VkDevice, VkQueue, uint32_t queue_family);
+#ifdef _WIN32
+	// Direct3D 11 mode: the app's (OpenDesk XR's submission) device
+	explicit compositor(ID3D11Device *);
+	bool d3d11() const { return d3d_device != nullptr; }
+	// textures of `dxgi_format` (typeless allowed: `format` is what we sample them as); `shared_ok` false for depth
+	std::unique_ptr<swapchain> create_swapchain_d3d11(uint32_t dxgi_format, VkFormat format, uint32_t width, uint32_t height,
+	                                                  uint32_t array_size, uint32_t mip_levels, uint32_t sample_count,
+	                                                  uint32_t image_count, bool depth, bool cube, bool render_target, bool uav, bool shader_resource);
+#endif
 	~compositor();
 
 	std::unique_ptr<swapchain> create_swapchain(VkFormat, uint32_t width, uint32_t height, uint32_t array_size,
@@ -132,16 +160,29 @@ private:
 	void app_submit(void (*record)(VkCommandBuffer, void *), void * ctx);         // on the app's queue, waits
 	void create_private_device();
 
-	// the application's device
-	VkPhysicalDevice app_physical;
-	VkDevice app_device;
-	VkQueue app_queue;
-	uint32_t app_family;
+	// the application's device (D3D11 mode: none)
+	VkPhysicalDevice app_physical = VK_NULL_HANDLE;
+	VkDevice app_device = VK_NULL_HANDLE;
+	VkQueue app_queue = VK_NULL_HANDLE;
+	uint32_t app_family = 0;
 	VkPhysicalDeviceMemoryProperties app_memory_properties{};
 	VkCommandPool app_pool = VK_NULL_HANDLE;
 	VkCommandBuffer app_cmd = VK_NULL_HANDLE;
 	VkFence app_fence = VK_NULL_HANDLE;
+#ifdef _WIN32
+	PFN_vkGetMemoryWin32HandleKHR get_memory_fd = nullptr; // (the name of the Linux one: same role)
+	// Direct3D 11 mode
+	ID3D11Device5 * d3d_device = nullptr;
+	ID3D11DeviceContext4 * d3d_context = nullptr;
+	ID3D11Fence * d3d_fence = nullptr;      // shared with `timeline`
+	VkSemaphore timeline = VK_NULL_HANDLE; // the D3D11 fence on our device
+	uint64_t fence_value = 0;
+	uint64_t luid = 0; // the D3D11 adapter
+	void create_d3d11_sync();
+#else
 	PFN_vkGetMemoryFdKHR get_memory_fd = nullptr;
+#endif
+	bool app_vulkan() const { return app_device != VK_NULL_HANDLE; }
 
 	// the compositor's private device on the same GPU
 	VkInstance instance = VK_NULL_HANDLE;
@@ -153,6 +194,7 @@ private:
 	VkCommandPool pool = VK_NULL_HANDLE;
 	VkCommandBuffer cmd = VK_NULL_HANDLE;
 	VkFence fence = VK_NULL_HANDLE;
+	void init_pipelines(); // everything on the private device after it exists
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
 	VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;

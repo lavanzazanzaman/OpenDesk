@@ -217,10 +217,9 @@ namespace opendesk_openxr {
 
         // Create the resources for pre-processing.
         CHECK_HRCMD(m_ovrSubmissionDevice->CreateVertexShader(
-            g_FullScreenQuadVS, sizeof(g_FullScreenQuadVS), nullptr, m_fullQuadVS.ReleaseAndGetAddressOf()));
+            g_FullScreenQuadVS_blob().data(), g_FullScreenQuadVS_blob().size(), nullptr, m_fullQuadVS.ReleaseAndGetAddressOf()));
         setDebugName(m_fullQuadVS.Get(), "FullQuad VS");
-        CHECK_HRCMD(m_ovrSubmissionDevice->CreatePixelShader(g_ResolveMultisampledDepthPS,
-                                                             sizeof(g_ResolveMultisampledDepthPS),
+        CHECK_HRCMD(m_ovrSubmissionDevice->CreatePixelShader(g_ResolveMultisampledDepthPS_blob().data(), g_ResolveMultisampledDepthPS_blob().size(),
                                                              nullptr,
                                                              m_resolveMultisampledDepthPS.ReleaseAndGetAddressOf()));
         setDebugName(m_resolveMultisampledDepthPS.Get(), "Resolve MSAA Depth PS");
@@ -812,7 +811,7 @@ namespace opendesk_openxr {
                 m_ovrSession, slice.ovrSwapchain, i, IID_PPV_ARGS(texture.ReleaseAndGetAddressOf())));
             setDebugName(
                 texture.Get(),
-                fmt::format(std::string(debugName) + " Texture[{}, {}, {}]", sliceIndex, i, (void*)&xrSwapchain));
+                fmt::format(fmt::runtime(std::string(debugName) + " Texture[{}, {}, {}]"), sliceIndex, i, (void*)&xrSwapchain));
 
             slice.images.push_back(std::move(texture));
         }

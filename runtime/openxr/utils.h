@@ -300,11 +300,19 @@ namespace opendesk_openxr::utils {
         PFN_vkCmdResetQueryPool vkCmdResetQueryPool{nullptr};
         PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp{nullptr};
         PFN_vkEndCommandBuffer vkEndCommandBuffer{nullptr};
+#ifdef _WIN32
+        PFN_vkGetMemoryWin32HandlePropertiesKHR vkGetMemoryWin32HandlePropertiesKHR{nullptr};
+#else
         PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR{nullptr};
+#endif
         PFN_vkBindImageMemory vkBindImageMemory{nullptr};
         PFN_vkCreateSemaphore vkCreateSemaphore{nullptr};
         PFN_vkDestroySemaphore vkDestroySemaphore{nullptr};
+#ifdef _WIN32
+        PFN_vkImportSemaphoreWin32HandleKHR vkImportSemaphoreWin32HandleKHR{nullptr};
+#else
         PFN_vkImportSemaphoreFdKHR vkImportSemaphoreFdKHR{nullptr};
+#endif
         PFN_vkCreateFence vkCreateFence{nullptr};
         PFN_vkDestroyFence vkDestroyFence{nullptr};
         PFN_vkResetFences vkResetFences{nullptr};
@@ -746,26 +754,22 @@ namespace opendesk_openxr::utils {
 
 #ifdef _WIN32
 #define DEFINE_DETOUR_FUNCTION(ReturnType, FunctionName, ...)                                                          \
-    ReturnType (*original_##FunctionName)(##__VA_ARGS__) = nullptr;                                                    \
-    ReturnType hooked_##FunctionName(##__VA_ARGS__)
+    ReturnType (*original_##FunctionName)(__VA_ARGS__) = nullptr;                                                      \
+    ReturnType hooked_##FunctionName(__VA_ARGS__)
 
+    // import-table patching (win_hook.h) where upstream uses Detours
     template <typename TMethod>
     void DetourDllAttach(const char* dll, const char* target, TMethod hooked, TMethod& original) {
         if (original) {
             // Already hooked.
             return;
         }
-
         HMODULE handle;
         GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN, dll, &handle);
-
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        original = (TMethod)GetProcAddress(handle, target);
-        DetourAttach((PVOID*)&original, hooked);
-
-        DetourTransactionCommit();
+        original = (TMethod)win_hook::attach(dll, target, (void*)hooked);
+        if (!original) {
+            original = (TMethod)GetProcAddress(handle, target);
+        }
     }
 
     template <typename TMethod>
@@ -774,14 +778,7 @@ namespace opendesk_openxr::utils {
             // Not hooked.
             return;
         }
-
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourDetach((PVOID*)&original, hooked);
-
-        DetourTransactionCommit();
-
+        win_hook::detach(dll, target, (void*)hooked, (void*)original);
         original = nullptr;
     }
 

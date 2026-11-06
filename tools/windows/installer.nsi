@@ -53,6 +53,18 @@ Section "OpenDesk Streamer" SecMain
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 
+; OpenDesk XR as the system's OpenXR runtime: Windows keeps it in HKLM, so it is set here (elevated) rather than by the
+; streamer, which would need a UAC prompt. The previous runtime is kept and restored on uninstall.
+Section "Make OpenDesk XR the OpenXR runtime" SecOpenXR
+  SetRegView 64
+  ReadRegStr $0 HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime"
+  StrCmp $0 "$INSTDIR\runtime\opendesk_xr.json" openxr_done
+  WriteRegStr HKLM "Software\OpenDesk" "PreviousOpenXRRuntime" "$0"
+  WriteRegStr HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime" "$INSTDIR\runtime\opendesk_xr.json"
+  WriteRegDWORD HKLM "SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes" "$INSTDIR\runtime\opendesk_xr.json" 0
+  openxr_done:
+SectionEnd
+
 ; The streamer listens on TCP 38810-38840 and discovers over UDP 38850. Adding the rules here avoids the
 ; Windows Firewall prompt on the first connection.
 Section "Firewall rule" SecFirewall
@@ -63,6 +75,16 @@ Section "Firewall rule" SecFirewall
 SectionEnd
 
 Section "Uninstall"
+  SetRegView 64
+  ReadRegStr $0 HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime"
+  StrCmp $0 "$INSTDIR\runtime\opendesk_xr.json" 0 openxr_kept
+  ReadRegStr $1 HKLM "Software\OpenDesk" "PreviousOpenXRRuntime"
+  StrCmp $1 "" 0 +3
+  DeleteRegValue HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime"
+  Goto openxr_kept
+  WriteRegStr HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime" "$1"
+  openxr_kept:
+  DeleteRegValue HKLM "SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes" "$INSTDIR\runtime\opendesk_xr.json"
   Delete "$SMPROGRAMS\OpenDesk\OpenDesk Streamer.lnk"
   Delete "$SMPROGRAMS\OpenDesk\Uninstall OpenDesk.lnk"
   RMDir "$SMPROGRAMS\OpenDesk"

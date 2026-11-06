@@ -692,11 +692,19 @@ namespace opendesk_openxr {
         VK_GET_PTR(vkCmdResetQueryPool);
         VK_GET_PTR(vkCmdWriteTimestamp);
         VK_GET_PTR(vkEndCommandBuffer);
+#ifdef _WIN32
+        VK_GET_PTR(vkGetMemoryWin32HandlePropertiesKHR);
+#else
         VK_GET_PTR(vkGetMemoryFdPropertiesKHR);
+#endif
         VK_GET_PTR(vkBindImageMemory);
         VK_GET_PTR(vkCreateSemaphore);
         VK_GET_PTR(vkDestroySemaphore);
+#ifdef _WIN32
+        VK_GET_PTR(vkImportSemaphoreWin32HandleKHR);
+#else
         VK_GET_PTR(vkImportSemaphoreFdKHR);
+#endif
         VK_GET_PTR(vkCreateFence);
         VK_GET_PTR(vkDestroyFence);
         VK_GET_PTR(vkResetFences);

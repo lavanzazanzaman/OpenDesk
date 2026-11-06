@@ -17,7 +17,7 @@ from compression import zstd
 
 REPO = "https://repo.msys2.org/mingw/clang64/"
 PREFIX = "mingw-w64-clang-x86_64-"
-DEFAULT = ["qt6-base", "ffmpeg", "lz4", "openssl", "vulkan-headers", "vulkan-loader", "openxr-sdk", "shaderc"]
+DEFAULT = ["qt6-base", "ffmpeg", "lz4", "openssl", "vulkan-headers", "vulkan-loader", "openxr-sdk", "shaderc", "fmt"]
 # runtime-only or toolchain packages the cross build never needs (the compiler comes from llvm-mingw)
 SKIP = {"clang", "llvm", "lld", "gcc", "gcc-libs", "crt-git", "headers-git", "winpthreads-git", "libwinpthread-git",
         "python", "perl", "bash", "cmake", "ninja", "pkgconf", "tcl", "tk", "gdb", "llvm-libs", "clang-libs"}

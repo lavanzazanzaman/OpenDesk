@@ -167,6 +167,9 @@ target_link_libraries(dmabuf-readback-test PRIVATE odengine PkgConfig::GPU)
 add_executable(vr-test-client tests/vr_test_client.cpp)
 target_link_libraries(vr-test-client PRIVATE odengine)
 
+add_executable(vr-server-test tests/vr_server_test.cpp)
+target_link_libraries(vr-server-test PRIVATE odengine)
+
 # vd-wineopenxr-fix [--check] wineopenxr.dll: the streamer's Proton WineOpenXR fix from the command line
 add_executable(vd-wineopenxr-fix tests/wineopenxr_fix_tool.cpp)
 target_link_libraries(vd-wineopenxr-fix PRIVATE odengine)

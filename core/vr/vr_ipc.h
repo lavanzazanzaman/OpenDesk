@@ -108,7 +108,7 @@ struct config_msg
 	uint32_t foveated = 0;        // foveated streaming: also a fovea image per eye (unwarped crop at render density)
 	image_desc fovea_image{};
 	uint32_t shared_state_size = 0;
-	uint32_t render_major = 0, render_minor = 0;
+	uint32_t render_major = 0, render_minor = 0; // the VR GPU's render node (Windows: its LUID, low and high part)
 	uint32_t gpu_vendor = 0, gpu_device = 0;
 };
 

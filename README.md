@@ -29,13 +29,15 @@ needed.
 | Desktop audio, headset microphone | ✅ | ✅ |
 | Videos tab (local library and playback) | ✅ | ✅ |
 | Games tab | ✅ | ✅ (Steam + Oculus) |
-| OpenXR runtime ("OpenDesk XR") | ✅ | ⏳ planned |
+| OpenXR runtime ("OpenDesk XR": D3D11 / D3D12 / OpenGL / Vulkan games) | ✅ | 🧪 built, hardware testing pending |
 | Face / eye / body tracking to VRChat | ✅ | ✅ |
-| Spacewarp / foveated VR streaming | ✅ | ⏳ planned |
+| Spacewarp / foveated VR streaming | ✅ | 🧪 built, hardware testing pending |
+| OpenVR games without SteamVR (xrizer) | ✅ | ⏳ in progress |
 
 The Linux build is the primary target and is tested against the stock headset
-app. The Windows backend streams the desktop and runs the same GUI/engine; the
-bundled OpenXR runtime is currently Linux-only. See
+app. The Windows build runs the same GUI/engine and now includes the VR server,
+VR encoding (NVENC zero-copy through CUDA, AMF/QSV) and the OpenDesk XR runtime;
+those still need testing on real Windows hardware. See
 [`docs/compatibility.md`](docs/compatibility.md) for the protocol-level
 details.
 

@@ -109,9 +109,7 @@ namespace opendesk_openxr {
 
     } // namespace BodyTracking
 
-#ifndef _WIN32
     // linux_bodystate.cpp
     void FillBodyStateFromFrameData(const uint8_t* frameData, BodyTracking::BodyStateV2& state);
-#endif
 
 } // namespace opendesk_openxr

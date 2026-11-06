@@ -340,6 +340,9 @@ void vr_server::run()
 		{
 			c.gpu_vendor = a->vendor;
 			c.gpu_device = a->device;
+			// Windows has no render node numbers: the runtime finds the VR GPU (ovr_Create's LUID, Vulkan) by LUID
+			c.render_major = uint32_t(a->luid);
+			c.render_minor = uint32_t(a->luid >> 32);
 		}
 		m.handles.owner_pid = p.process ? 0 : GetCurrentProcessId();
 		bool ok = give(p, w->mapping, FILE_MAP_READ, m.handles); // read-only view for the app

@@ -22,7 +22,11 @@
 
 #pragma once
 
+#ifdef _WIN32
+#include "framework/win/dispatch.gen.h" // + D3D11/D3D12/OpenGL, win32 time, audio GUIDs
+#else
 #include "framework/dispatch.gen.h"
+#endif
 
 #include "accessibility.h"
 #include "utils.h"

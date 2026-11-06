@@ -1,0 +1,45 @@
+CMake Warning at /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:3391 (message):
+  No qtpaths executable found for deployment purposes.  Candidates searched:
+
+      /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/bin/qtpaths6
+      /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/bin/qtpaths
+Call Stack (most recent call first):
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreConfigExtras.cmake:30 (_qt_internal_setup_deploy_support)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreConfig.cmake:196 (include)
+  /usr/share/cmake/Modules/CMakeFindDependencyMacro.cmake:93 (find_package)
+  /usr/share/cmake/Modules/CMakeFindDependencyMacro.cmake:125 (__find_dependency_common)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/QtPublicDependencyHelpers.cmake:142 (find_dependency)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Gui/Qt6GuiDependencies.cmake:52 (_qt_internal_find_qt_dependencies)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Gui/Qt6GuiConfig.cmake:40 (include)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/Qt6Config.cmake:257 (find_package)
+  core/CMakeLists.txt:18 (find_package)
+
+
+CMake Warning at /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/QtPublicWalkLibsHelpers.cmake:333 (message):
+  The Network target is mentioned as a dependency for odengine, but not
+  declared.  The linking might be incomplete.
+Call Stack (most recent call first):
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/QtPublicWalkLibsHelpers.cmake:402 (__qt_internal_walk_libs)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:804 (__qt_internal_collect_all_target_dependencies)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:914 (_qt_internal_finalize_executable)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:960:EVAL:1 (qt6_finalize_target)
+  streamer/CMakeLists.txt:DEFERRED
+
+
+CMake Warning at /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/QtPublicWalkLibsHelpers.cmake:333 (message):
+  The Network target is mentioned as a dependency for odengine, but not
+  declared.  The linking might be incomplete.
+Call Stack (most recent call first):
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6/QtPublicWalkLibsHelpers.cmake:402 (__qt_internal_walk_libs)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:804 (__qt_internal_collect_all_target_dependencies)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:914 (_qt_internal_finalize_executable)
+  /mnt/Gen4NVME2TB/WivrnPyrowaveFork/toolchain/win-sysroot/clang64/lib/cmake/Qt6Core/Qt6CoreMacros.cmake:960:EVAL:1 (qt6_finalize_target)
+  streamer/CMakeLists.txt:DEFERRED
+
+
+CMake Warning (unused-cli):
+  Manually-specified variables were not used by the project:
+
+    CMAKE_TOOLCHAIN_FILE
+
+

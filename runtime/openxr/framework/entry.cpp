@@ -22,7 +22,9 @@
 
 #include "pch.h"
 
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 
 #include <runtime.h>
 

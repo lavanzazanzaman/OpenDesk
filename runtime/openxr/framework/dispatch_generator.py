@@ -27,8 +27,11 @@ import sys
 # Import dependencies from the OpenXR SDK.
 cur_dir = os.path.abspath(os.path.dirname(__file__))
 base_dir = os.path.abspath(os.path.join(cur_dir, '..', '..'))
-# Linux port: the SDK lives in the pristine VDXR checkout next to this repo's runtime/
-sdk_dir = os.path.join(base_dir, '..', 'openxr', 'external', 'OpenXR-SDK-Source')
+# The OpenXR-SDK-Source checkout matching third_party/openxr (OPENXR_SDK_SOURCE, else next to this repo)
+sdk_dir = os.environ.get('OPENXR_SDK_SOURCE') or os.path.join(base_dir, '..', 'openxr', 'external', 'OpenXR-SDK-Source')
+# DISPATCH_PLATFORM=windows: the Windows build's extensions (D3D11/D3D12/OpenGL, win32 time, audio GUIDs), written to win/
+windows = os.environ.get('DISPATCH_PLATFORM') == 'windows'
+out_dir = os.path.join(cur_dir, 'win') if windows else cur_dir
 sys.path.append(os.path.join(sdk_dir, 'specification', 'scripts'))
 sys.path.append(os.path.join(sdk_dir, 'src', 'scripts'))
 
@@ -45,7 +48,7 @@ EXCLUDED_API = ['xrGetInstanceProcAddr',
 SPECIAL_API = ['xrDestroyInstance']
 # We rewrite the trampoline and prototype for these
 VERY_SPECIAL_API = ['xrGetInstanceProperties']
-# Linux port: Vulkan only; no win32 time, no Oculus audio device GUIDs
+# Linux: Vulkan only; no win32 time, no Oculus audio device GUIDs
 EXTENSIONS = ['XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2',
               'XR_KHR_composition_layer_depth', 'XR_KHR_composition_layer_cylinder', 'XR_KHR_composition_layer_cube', 'XR_KHR_visibility_mask',
               'XR_KHR_convert_timespec_time', 'XR_FB_display_refresh_rate', 'XR_EXT_hand_tracking', 'XR_EXT_hand_tracking_data_source',
@@ -53,6 +56,9 @@ EXTENSIONS = ['XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2',
               'XR_FB_eye_tracking_social', 'XR_FB_face_tracking', 'XR_FB_face_tracking2', 'XR_FB_hand_tracking_aim',
               'XR_FB_body_tracking', 'XR_META_body_tracking_full_body', 'XR_META_body_tracking_fidelity', 'XR_META_body_tracking_calibration', 'XR_HTCX_vive_tracker_interaction',
               'XR_EXT_active_action_set_priority', 'XR_KHR_locate_spaces', 'XR_KHR_maintenance1', 'XR_EXT_local_floor', 'XR_EXT_palm_pose']
+if windows:
+    EXTENSIONS = ['XR_KHR_D3D11_enable', 'XR_KHR_D3D12_enable', 'XR_KHR_opengl_enable', 'XR_KHR_win32_convert_performance_counter_time',
+                  'XR_OCULUS_audio_device_guid'] + EXTENSIONS
 
 SILENT_ERRORS = {
     'xrSuggestInteractionProfileBindings': ['XR_ERROR_PATH_UNSUPPORTED'],
@@ -341,7 +347,7 @@ if __name__ == '__main__':
     registry = Registry(DispatchGenCppOutputGenerator(diagFile=None),
                         AutomaticSourceGeneratorOptions(conventions       = conventions,
                                                         filename          = 'dispatch.gen.cpp',
-                                                        directory         = cur_dir,
+                                                        directory         = out_dir,
                                                         apiname           = 'openxr',
                                                         profile           = None,
                                                         versions          = featuresPat,
@@ -356,7 +362,7 @@ if __name__ == '__main__':
     registry = Registry(DispatchGenHOutputGenerator(diagFile=None),
                         AutomaticSourceGeneratorOptions(conventions       = conventions,
                                                         filename          = 'dispatch.gen.h',
-                                                        directory         = cur_dir,
+                                                        directory         = out_dir,
                                                         apiname           = 'openxr',
                                                         profile           = None,
                                                         versions          = featuresPat,

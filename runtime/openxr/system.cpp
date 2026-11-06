@@ -316,95 +316,7 @@ namespace opendesk_openxr {
     }
 
     bool OpenXrRuntime::initializeOVR() {
-#ifdef _WIN32
-#ifndef LOAD_LOCAL_LIBOVR
-#ifndef STANDALONE_RUNTIME
-        // The bundled runtime only works with the OpenDesk streamer.
-        m_useOculusRuntime = false;
-#else
-        const auto localRuntimePath = dllHome /
-#ifdef _WIN64
-                                      L".\\LibOVRRT64_1.dll";
-#else
-                                      L".\\LibOVRRT32_1.dll";
-#endif
-        m_useOculusRuntime = !IsServiceRunning(L"opendesk-streamer.exe");
-#endif
-        if (m_useOculusRuntime && !getSetting("allow_oculus_runtime").value_or(true)) {
-            // Indicate that the OpenDesk streamer is required by the current configuration.
-            OnceLog("OpenDesk Streamer is not running\n");
-            return false;
-        }
-
-        std::wstring overridePath;
-        if (!m_useOculusRuntime) {
-            // Locate the OpenDesk LibOVR layer.
-            std::filesystem::path path(
-                RegGetString(HKEY_LOCAL_MACHINE, "SOFTWARE\\OpenDesk\\Streamer", "Path")
-                    .value());
-            path = path / L"opendesk-ovr-";
-
-            overridePath = path.wstring();
-        }
-#ifdef STANDALONE_RUNTIME
-        else if (std::filesystem::exists(localRuntimePath)) {
-            OnceLog("Using local OVR runtime\n");
-            overridePath = dllHome.wstring() + L"\\";
-        }
-#endif
-#else
-        // Load the LibOVR local to our folder.
-        m_useOculusRuntime = true;
-        const std::wstring overridePath = dllHome.wstring() + L"\\";
-#endif
-
-        // Initialize OVR.
-        ovrInitParams initParams{};
-        initParams.Flags = ovrInit_RequestVersion | (has_XR_MND_headless ? ovrInit_Invisible : ovrInit_FocusAware);
-        initParams.RequestedMinorVersion = OVR_MINOR_VERSION;
-        const ovrResult result =
-            ovr_InitializeWithPathOverride(&initParams, overridePath.empty() ? nullptr : overridePath.c_str());
-        TraceLoggingWrite(g_traceProvider,
-                          "OVR_Initialize",
-                          TLArg(overridePath.c_str(), "OverridePath"),
-                          TLArg((int)result, "Result"));
-        if (result == ovrError_LibLoad) {
-            // This would happen on Pico. Indicate that the OpenDesk streamer is required.
-            OnceLog("OpenDesk Streamer is not running\n");
-            return false;
-        } else if (result == ovrError_ServiceConnection || result == ovrError_RemoteSession) {
-            return false;
-        }
-        CHECK_OVRCMD(result);
-
-        Log("Using %s runtime\n", !m_useOculusRuntime ? "OpenDesk" : BACKEND_PRETTY_NAME);
-
-        if (!m_useOculusRuntime) {
-            identifyOpenDesk();
-        }
-
-        std::string_view versionString(ovr_GetVersionString());
-        Log("OVR: %s\n", versionString.data());
-        TraceLoggingWrite(g_traceProvider, "OVR_SDK", TLArg(versionString.data(), "VersionString"));
-
-        *m_OVRlay.put() = LoadLibrary((dllHome /
-#ifdef _WIN64
-                                       L".\\OVRlay.dll"
-#else
-                                       L".\\OVRlay-32.dll"
-#endif
-                                       )
-                                          .c_str());
-        if (m_OVRlay) {
-            Log("Loaded OVRlay\n");
-        }
-
-        m_isOVRLoaded = true;
-        m_ovrSession = nullptr;
-
-        return true;
-#else
-        // Linux: libovr-opendesk talks to the OpenDesk streamer over its VR socket
+        // libovr-opendesk (linked directly) talks to the OpenDesk streamer: its VR socket on Linux, its named pipe on Windows
         m_useOculusRuntime = false;
         if (!ovr_Detect(0).IsOculusServiceRunning) {
             OnceLog("OpenDesk Streamer is not running with VR enabled\n");
@@ -419,7 +331,6 @@ namespace opendesk_openxr {
         m_isOVRLoaded = true;
         m_ovrSession = nullptr;
         return true;
-#endif
     }
 
     void OpenXrRuntime::identifyOpenDesk() {
@@ -656,58 +567,7 @@ namespace opendesk_openxr {
         }
     }
 
-#ifdef _WIN32
-    void OpenXrRuntime::initializeBodyTrackingMmf() {
-        *m_bodyStateFile.put() = OpenFileMapping(FILE_MAP_READ, false, L"OpenDesk.BodyState");
-        if (!m_bodyStateFile) {
-            TraceLoggingWrite(g_traceProvider, "OpenDeskBodyTracker_NotAvailable");
-            return;
-        }
-
-        m_bodyState = reinterpret_cast<BodyTracking::BodyStateV2*>(
-            MapViewOfFile(m_bodyStateFile.get(), FILE_MAP_READ, 0, 0, sizeof(BodyTracking::BodyStateV2)));
-        if (!m_bodyState) {
-            TraceLoggingWrite(g_traceProvider, "OpenDeskBodyTracker_MappingError_BodyStateV2");
-        }
-
-        *m_bodyStateEvent.put() = OpenEvent(SYNCHRONIZE, false, L"OpenDesk.BodyStateEvent2");
-    }
-
-    void OpenXrRuntime::bodyStateWatcherThread() {
-        TraceLocalActivity(local);
-        TraceLoggingWriteStart(local, "BodyStateWatcherThread");
-
-        SetThreadPriority(GetCurrentThread(),
-                          getSetting("body_state_watcher_priority").value_or(THREAD_PRIORITY_TIME_CRITICAL));
-
-        while (true) {
-            // Wait for the next update.
-            {
-                TraceLocalActivity(wait);
-                TraceLoggingWriteStart(wait, "BodyStateWatcherThread_Wait");
-                const auto status = WaitForSingleObject(m_bodyStateEvent.get(), 100 /* ms */);
-                TraceLoggingWriteStop(wait, "BodyStateWatcherThread_Wait", TLArg(status, "Status"));
-            }
-
-            if (m_terminateBodyStateThread) {
-                break;
-            }
-
-            // Cache the new state.
-            {
-                std::unique_lock lock(m_bodyStateMutex);
-                m_cachedBodyState = *m_bodyState;
-            }
-
-            // Avoid spurious wakeup when the event was not reset quickly-enough.
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        }
-
-        TraceLoggingWriteStop(local, "BodyStateWatcherThread");
-    }
-
-#else
-    // Linux: hands, eyes, face and body come with the headset's FrameData through libovr-opendesk
+    // Hands, eyes, face and body come with the headset's FrameData through libovr-opendesk (Linux and Windows)
     void OpenXrRuntime::initializeBodyTrackingMmf() {
         m_bodyState = new BodyTracking::BodyStateV2{};
     }
@@ -731,6 +591,5 @@ namespace opendesk_openxr {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
     }
-#endif
 
 } // namespace opendesk_openxr

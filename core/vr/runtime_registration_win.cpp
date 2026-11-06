@@ -113,12 +113,17 @@ std::string installed_manifest()
 
 bool active()
 {
-	return same_path(read_string(HKEY_LOCAL_MACHINE, khronos_key, L"ActiveRuntime"), fs::path(installed_manifest()).wstring());
+	const std::wstring current = read_string(HKEY_LOCAL_MACHINE, khronos_key, L"ActiveRuntime");
+	return same_path(current, fs::path(installed_manifest()).wstring()) ||
+	       same_path(current, (fs::path(od::resource_dir("runtime", "").toStdWString()) / L"opendesk_xr.json").wstring());
 }
 
 std::string activate(const std::string & runtime_dir)
 {
 	std::error_code ec;
+	// the installer made the installed runtime the active one (it runs elevated): nothing to do, no prompt
+	if (same_path(read_string(HKEY_LOCAL_MACHINE, khronos_key, L"ActiveRuntime"), (fs::path(runtime_dir) / "opendesk_xr.json").wstring()))
+		return {};
 	fs::create_directories(install_dir(), ec);
 	for (const char * lib: {"opendesk-openxr.dll", "ovr-vd.dll"})
 	{
