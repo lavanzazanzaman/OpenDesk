@@ -1083,6 +1083,18 @@ void native_engine::update_video(bool force)
 			                                         ") - using the desktop portal (no virtual monitors)");
 		connect(sess->displays.get(), &display_manager::restore_token, this, [this](QString t) { save_portal_token(t); });
 		connect(sess->displays.get(), &display_manager::log, this, &native_engine::info);
+#ifdef _WIN32
+		// the Virtual Display Driver's monitors appear a few seconds after the request: the extra display becomes the
+		// main screen then (displays_changed restarts the stream)
+		connect(sess->displays.get(), &display_manager::virtual_ready, this, [this, sess](QString name) {
+			if (current.get() != sess || !sess->extra_display || sess->has_switched_monitor)
+				return;
+			auto all = sess->displays->displays();
+			for (size_t i = 0; i < all.size(); ++i)
+				if (all[i].name == name.toStdString())
+					sess->monitor_start = int(i);
+		});
+#endif
 		connect(sess->displays.get(), &display_manager::displays_changed, this, [this, sess] {
 			if (current.get() != sess || !sess->displays)
 				return;
@@ -1679,7 +1691,9 @@ void native_engine::on_monitor_message(uint8_t type, const bytes & payload)
 			auto name = sess->displays->add_virtual(mode, &error);
 			if (!name)
 				return info("[monitors] cannot add a virtual monitor: " + error);
-			info(QString("[monitors] virtual monitor %1 added (%2x%3 @%4 Hz)").arg(QString::fromStdString(*name)).arg(mode.width).arg(mode.height).arg(mode.refresh_mhz / 1000.0, 0, 'f', 1));
+			info(QString("[monitors] virtual monitor %1 (%2x%3 @%4 Hz)")
+			             .arg(name->empty() ? QString("requested") : QString::fromStdString(*name) + " added")
+			             .arg(mode.width).arg(mode.height).arg(mode.refresh_mhz / 1000.0, 0, 'f', 1));
 		}
 		monitor_count = count + 1;
 		save_engine_value("monitor_count", monitor_count);
@@ -1744,7 +1758,9 @@ void native_engine::sync_extra_display()
 			sess->extra_display = true; // don't retry on every restart
 			return info("[monitors] cannot create the extra display: " + error);
 		}
-		info(QString("[monitors] extra display %1 created (%2x%3 @%4 Hz)").arg(QString::fromStdString(*name)).arg(mode.width).arg(mode.height).arg(mode.refresh_mhz / 1000.0, 0, 'f', 1));
+		info(QString("[monitors] extra display %1 (%2x%3 @%4 Hz)")
+		             .arg(name->empty() ? QString("requested") : QString::fromStdString(*name) + " created")
+		             .arg(mode.width).arg(mode.height).arg(mode.refresh_mhz / 1000.0, 0, 'f', 1));
 		if (!sess->has_switched_monitor)
 		{
 			auto all = sess->displays->displays();

@@ -6,7 +6,8 @@
 // elevated, or the installer granted the key), else asks once per run through UAC (reg.exe, elevated) and reports
 // "pending: ..." until the value is ours. The previous value is kept in HKCU\Software\OpenDesk\OpenXR\PreviousRuntime; restore() puts
 // it back only when that needs no new prompt - like the "OpenXR Runtime" option of other streamers, OpenDesk XR stays the
-// active runtime otherwise.
+// active runtime otherwise. With OpenDesk Service (installed by the installer) both directions need no prompt: OpenDesk
+// XR while the streamer runs, the user's runtime again afterwards - like Linux.
 //
 // OpenVR: per user, no rights needed: %LOCALAPPDATA%\openvr\openvrpaths.vrpath, swapped while the streamer runs and
 // restored when it exits, exactly as on Linux. xrizer's Windows build lives in bin\win64\vrclient_x64.dll.
@@ -19,6 +20,7 @@
 #include <shlobj.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <thread>
 #include <fstream>
@@ -75,6 +77,25 @@ bool same_path(const std::wstring & a, const std::wstring & b)
 constexpr const wchar_t * khronos_key = L"SOFTWARE\\Khronos\\OpenXR\\1";
 constexpr const wchar_t * our_key = L"Software\\OpenDesk\\OpenXR";
 
+// OpenDesk Service (installed with the streamer, streamer/service): switches HKLM's OpenXR runtime to the installed
+// OpenDesk XR and back without a prompt. "" when the service isn't there.
+std::string service_call(const char * command)
+{
+	const wchar_t * pipe = L"\\\\.\\pipe\\opendesk-service";
+	if (!WaitNamedPipeW(pipe, 500))
+		return {};
+	HANDLE h = CreateFileW(pipe, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+	if (h == INVALID_HANDLE_VALUE)
+		return {};
+	DWORD mode = PIPE_READMODE_MESSAGE;
+	SetNamedPipeHandleState(h, &mode, nullptr, nullptr);
+	char reply[128]{};
+	DWORD n = 0;
+	const BOOL ok = TransactNamedPipe(h, const_cast<char *>(command), DWORD(strlen(command)), reply, sizeof(reply) - 1, &n, nullptr);
+	CloseHandle(h);
+	return ok ? std::string(reply, n) : std::string();
+}
+
 // reg.exe in an elevated process: one UAC prompt (on its own thread: the engine keeps running while the user decides)
 bool elevated_set_active_runtime(const std::wstring & manifest)
 {
@@ -121,8 +142,10 @@ bool active()
 std::string activate(const std::string & runtime_dir)
 {
 	std::error_code ec;
-	// the installer made the installed runtime the active one (it runs elevated): nothing to do, no prompt
+	// the installed runtime is active already, or OpenDesk Service makes it so: nothing to copy, no prompt
 	if (same_path(read_string(HKEY_LOCAL_MACHINE, khronos_key, L"ActiveRuntime"), (fs::path(runtime_dir) / "opendesk_xr.json").wstring()))
+		return {};
+	if (service_call("openxr-activate") == "ok" && active())
 		return {};
 	fs::create_directories(install_dir(), ec);
 	for (const char * lib: {"opendesk-openxr.dll", "ovr-vd.dll"})
@@ -169,6 +192,8 @@ std::string activate(const std::string & runtime_dir)
 void restore()
 {
 	if (!active())
+		return;
+	if (service_call("openxr-restore") == "ok") // like Linux: the user's runtime again while the streamer isn't running
 		return;
 	const std::wstring previous = read_string(HKEY_CURRENT_USER, our_key, L"PreviousRuntime");
 	if (previous.empty())

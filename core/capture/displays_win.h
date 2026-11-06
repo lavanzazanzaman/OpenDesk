@@ -18,6 +18,8 @@
 #include <string>
 #include <vector>
 
+class QTimer;
+
 namespace od
 {
 class display_manager : public QObject
@@ -44,6 +46,8 @@ public:
 		int refresh_mhz = 60000;
 	};
 	virtual_mode main_monitor_mode();
+	// asks the driver for one more monitor and returns at once with "" (pending): virtual_ready + displays_changed follow
+	// when Windows has it (the driver restarts, which takes a few seconds)
 	std::optional<std::string> add_virtual(virtual_mode, QString * error);
 	bool remove_virtual(); // the newest one
 	bool set_portrait(const display_info &, bool portrait, QString * error);
@@ -53,6 +57,7 @@ public:
 
 signals:
 	void displays_changed();
+	void virtual_ready(QString name); // a monitor add_virtual asked for has appeared
 	void restore_token(QString token);
 	void log(QString line);
 
@@ -60,5 +65,10 @@ private:
 	bool started = false;
 	std::vector<std::string> added; // virtual monitors this session added (device names), oldest first
 	int base_count = -1;            // the driver's monitor count before this session changed it
+	QTimer * pending = nullptr; // waiting for the driver's new monitor
+	std::vector<std::string> pending_before;
+	virtual_mode pending_mode;
+	int pending_polls = 0;
+	void poll_pending();
 };
 } // namespace od

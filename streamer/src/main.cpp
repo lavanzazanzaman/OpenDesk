@@ -69,12 +69,69 @@ void crash_handler(int sig)
 	raise(sig);
 }
 
+#else
+// Windows: the same module+offset lines from the crashing thread's context (x64 unwind tables; llvm-addr2line -e
+// <module> resolves them), plus a minidump next to the log
+LONG WINAPI crash_filter(EXCEPTION_POINTERS * ep)
+{
+	char line[600];
+	snprintf(line, sizeof(line), "--- crash: exception 0x%08lx at %p\n", ep->ExceptionRecord->ExceptionCode,
+	         ep->ExceptionRecord->ExceptionAddress);
+	crash_write(line);
+	CONTEXT ctx = *ep->ContextRecord;
+	for (int i = 0; i < 64 && ctx.Rip; ++i)
+	{
+		HMODULE module = nullptr;
+		char name[MAX_PATH] = "?";
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		                       reinterpret_cast<LPCSTR>(ctx.Rip), &module))
+			GetModuleFileNameA(module, name, sizeof(name));
+		const char * base = strrchr(name, '\\');
+		snprintf(line, sizeof(line), "  #%d %s+0x%llx\n", i, base ? base + 1 : name,
+		         (unsigned long long)(ctx.Rip - reinterpret_cast<DWORD64>(module)));
+		crash_write(line);
+		DWORD64 image_base = 0;
+		PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image_base, nullptr);
+		if (!fn) // leaf function: the return address is on top of the stack
+		{
+			ctx.Rip = *reinterpret_cast<DWORD64 *>(ctx.Rsp);
+			ctx.Rsp += 8;
+			continue;
+		}
+		PVOID handler_data = nullptr;
+		DWORD64 establisher = 0;
+		RtlVirtualUnwind(UNW_FLAG_NHANDLER, image_base, ctx.Rip, fn, &ctx, &handler_data, &establisher, nullptr);
+	}
+	// minidump for a debugger (dbghelp ships with Windows)
+	using dump_fn = BOOL(WINAPI *)(HANDLE, DWORD, HANDLE, int, void *, void *, void *);
+	if (HMODULE dbghelp = LoadLibraryW(L"dbghelp.dll"))
+		if (auto dump = reinterpret_cast<dump_fn>(reinterpret_cast<void *>(GetProcAddress(dbghelp, "MiniDumpWriteDump"))))
+		{
+			const QString path = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/OpenDesk/streamer-crash.dmp";
+			HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(path.utf16()), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+			if (file != INVALID_HANDLE_VALUE)
+			{
+				struct
+				{
+					DWORD thread;
+					EXCEPTION_POINTERS * pointers;
+					BOOL client;
+				} info{GetCurrentThreadId(), ep, FALSE}; // MINIDUMP_EXCEPTION_INFORMATION
+				dump(GetCurrentProcess(), GetCurrentProcessId(), file, 0 /* MiniDumpNormal */, &info, nullptr, nullptr);
+				CloseHandle(file);
+				crash_write("  minidump: streamer-crash.dmp next to this log\n");
+			}
+		}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
 #endif
 
 void install_crash_handler(int log_fd)
 {
 	crash_fd = log_fd;
-#ifndef _WIN32
+#ifdef _WIN32
+	SetUnhandledExceptionFilter(crash_filter);
+#else
 	void * warm[1];
 	backtrace(warm, 1); // loads libgcc now, not inside the handler
 	struct sigaction sa{};
@@ -157,6 +214,8 @@ int main(int argc, char ** argv)
 
 	Engine engine;
 	install_crash_handler(engine.logFd());
+	if (qEnvironmentVariableIsSet("OPENDESK_TEST_CRASH")) // checks the crash report (tools/ci.sh)
+		QTimer::singleShot(1500, [] { *static_cast<volatile int *>(nullptr) = 1; });
 	MainWindow window(engine);
 
 	// dev aid: `--screenshot DIR` renders every tab to DIR/tab-N.png without starting the engine

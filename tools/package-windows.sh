@@ -16,6 +16,7 @@ mkdir -p "$DEST"
 EXE="$BUILD/streamer/opendesk-streamer.exe"
 [ -f "$EXE" ] || { echo "missing $EXE" >&2; exit 1; }
 cp "$EXE" "$DEST/OpenDesk.exe"
+cp "$BUILD/streamer/opendesk-service.exe" "$DEST/"
 
 # Cross-build from Linux (tools/windows/llvm-mingw.cmake): OPENDESK_WIN_SYSROOT=<sysroot>/clang64. DLLs come from the
 # sysroot and llvm-mingw, the Qt plugins are copied by hand (no windeployqt on Linux).

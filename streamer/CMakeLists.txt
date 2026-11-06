@@ -45,3 +45,11 @@ else()
     install(FILES ${PROJECT_SOURCE_DIR}/tools/appimage/opendesk.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
 endif()
+
+if(WIN32)
+    # OpenDesk Service: switches the system's OpenXR runtime for the streamer (installed and started by the installer)
+    add_executable(opendesk-service service/runtime_service.cpp)
+    target_compile_definitions(opendesk-service PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00)
+    target_link_options(opendesk-service PRIVATE -municode -static)
+    target_link_libraries(opendesk-service PRIVATE advapi32)
+endif()

@@ -65,6 +65,16 @@ Section "Make OpenDesk XR the OpenXR runtime" SecOpenXR
   openxr_done:
 SectionEnd
 
+; OpenDesk Service (LocalSystem): switches the OpenXR runtime to OpenDesk XR while the streamer runs and back
+; afterwards, without UAC prompts (streamer/service/runtime_service.cpp)
+Section "OpenDesk Service" SecService
+  nsExec::ExecToLog 'sc stop OpenDeskService'
+  nsExec::ExecToLog 'sc delete OpenDeskService'
+  nsExec::ExecToLog 'sc create OpenDeskService binPath= "\"$INSTDIR\opendesk-service.exe\"" start= auto DisplayName= "OpenDesk Service"'
+  nsExec::ExecToLog 'sc description OpenDeskService "Switches the OpenXR runtime to OpenDesk XR while OpenDesk Streamer runs"'
+  nsExec::ExecToLog 'sc start OpenDeskService'
+SectionEnd
+
 ; The streamer listens on TCP 38810-38840 and discovers over UDP 38850. Adding the rules here avoids the
 ; Windows Firewall prompt on the first connection.
 Section "Firewall rule" SecFirewall
@@ -75,6 +85,8 @@ Section "Firewall rule" SecFirewall
 SectionEnd
 
 Section "Uninstall"
+  nsExec::ExecToLog 'sc stop OpenDeskService'
+  nsExec::ExecToLog 'sc delete OpenDeskService'
   SetRegView 64
   ReadRegStr $0 HKLM "SOFTWARE\Khronos\OpenXR\1" "ActiveRuntime"
   StrCmp $0 "$INSTDIR\runtime\opendesk_xr.json" 0 openxr_kept

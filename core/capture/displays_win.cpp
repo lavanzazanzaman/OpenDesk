@@ -1,5 +1,7 @@
 #include "displays_win.h"
 
+#include <QTimer>
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -7,7 +9,6 @@
 #include <chrono>
 #include <cstring>
 #include <format>
-#include <thread>
 
 namespace od
 {
@@ -181,39 +182,62 @@ std::optional<std::string> display_manager::add_virtual(virtual_mode m, QString 
 			*error = "virtual monitors need the Virtual Display Driver (github.com/VirtualDrivers/Virtual-Display-Driver)";
 		return std::nullopt;
 	}
-	const auto before = virtual_displays(displays());
+	if (pending && pending->isActive())
+	{
+		if (error)
+			*error = "the previous virtual monitor is still being added";
+		return std::nullopt;
+	}
+	pending_before = virtual_displays(displays());
 	if (base_count < 0)
-		base_count = int(before.size());
-	if (!vdd_command(std::format(L"SETDISPLAYCOUNT {}", before.size() + 1)))
+		base_count = int(pending_before.size());
+	if (!vdd_command(std::format(L"SETDISPLAYCOUNT {}", pending_before.size() + 1)))
 	{
 		if (error)
 			*error = "the Virtual Display Driver did not take the command";
 		return std::nullopt;
 	}
-	// the driver restarts with one more monitor: wait for it
-	for (int i = 0; i < 40; ++i)
+	// the driver restarts with one more monitor: wait for it without blocking the engine
+	pending_mode = m;
+	pending_polls = 0;
+	if (!pending)
 	{
-		std::this_thread::sleep_for(std::chrono::milliseconds(200));
-		for (const auto & name: virtual_displays(displays()))
-			if (std::find(before.begin(), before.end(), name) == before.end())
-			{
-				if (!set_mode(name, m))
-					emit log(QString("[monitors] %1: %2x%3 is not in the Virtual Display Driver's resolution list, keeping its default")
-					                 .arg(QString::fromStdString(name))
-					                 .arg(m.width)
-					                 .arg(m.height));
-				added.push_back(name);
-				emit displays_changed();
-				return name;
-			}
+		pending = new QTimer(this);
+		pending->setInterval(200);
+		connect(pending, &QTimer::timeout, this, &display_manager::poll_pending);
 	}
-	if (error)
-		*error = "the Virtual Display Driver added no monitor";
-	return std::nullopt;
+	pending->start();
+	return std::string();
+}
+
+void display_manager::poll_pending()
+{
+	for (const auto & name: virtual_displays(displays()))
+		if (std::find(pending_before.begin(), pending_before.end(), name) == pending_before.end())
+		{
+			pending->stop();
+			if (!set_mode(name, pending_mode))
+				emit log(QString("[monitors] %1: %2x%3 is not in the Virtual Display Driver's resolution list, keeping its default")
+				                 .arg(QString::fromStdString(name))
+				                 .arg(pending_mode.width)
+				                 .arg(pending_mode.height));
+			added.push_back(name);
+			emit log(QString("[monitors] virtual monitor %1 is ready").arg(QString::fromStdString(name)));
+			emit virtual_ready(QString::fromStdString(name));
+			emit displays_changed();
+			return;
+		}
+	if (++pending_polls >= 50) // 10 s
+	{
+		pending->stop();
+		emit log("[monitors] the Virtual Display Driver added no monitor");
+	}
 }
 
 bool display_manager::remove_virtual()
 {
+	if (pending && pending->isActive())
+		pending->stop(); // one asked for but not there yet: the count goes back down below
 	if (added.empty())
 		return false;
 	const auto now = virtual_displays(displays());
