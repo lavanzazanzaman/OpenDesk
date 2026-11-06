@@ -36,5 +36,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:/src:ro" -v "$OUT:/out" ope
 chmod +x "$OUT/downloads/appimagetool.AppImage"
 (cd "$OUT/downloads"; ./appimagetool.AppImage --appimage-extract >/dev/null)
 ARCH=x86_64 "$OUT/downloads/squashfs-root/AppRun" --runtime-file "$OUT/downloads/runtime-x86_64" \
-    "$OUT/AppDir" "$ROOT/dist/OpenDesk-Linux-x86_64.AppImage"
+    "$OUT/AppDir" "$ROOT/dist/.OpenDesk-Linux-x86_64.AppImage.new"
+# rename into place: a running copy of the old AppImage keeps its file (writing over it fails: "Text file busy")
+mv -f "$ROOT/dist/.OpenDesk-Linux-x86_64.AppImage.new" "$ROOT/dist/OpenDesk-Linux-x86_64.AppImage"
 (cd "$ROOT/dist"; sha256sum OpenDesk-Linux-x86_64.AppImage > SHA256SUMS)
