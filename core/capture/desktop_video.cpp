@@ -243,6 +243,8 @@ void desktop_video_sender::open_encoder(stream_state & st, const captured_frame 
 			ec.pre_encode = params.pre_encode;
 			ec.vbaq = params.vbaq;
 			st.encoder = std::make_unique<hardware_encoder>(ec);
+			if (cb.log) // which input path and why (GPU frames, or the reason for reading them back)
+				st.encoder->set_log([log = cb.log](const std::string & line) { log(line); });
 			st.encoder->prime(f); // open the codec now so an unsupported one fails here, not mid-stream
 			st.codec = c;
 			break;

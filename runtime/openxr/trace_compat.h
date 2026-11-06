@@ -10,7 +10,16 @@ struct TraceLoggingActivity
 {
 };
 #define TraceLoggingWrite(...) ((void)0)
-#define TraceLoggingWriteStart(...) ((void)0)
+// the first call of each traced function leaves one line in the log: where an app stops, the last line shows
+#include <mutex>
+namespace opendesk_openxr::log {
+    void Log(const char* fmt, ...);
+}
+#define TraceLoggingWriteStart(activity, name, ...)                                                                    \
+    do {                                                                                                               \
+        static std::once_flag odFirstCall_;                                                                            \
+        std::call_once(odFirstCall_, [] { ::opendesk_openxr::log::Log("first call: %s\n", name); });                   \
+    } while (0)
 #define TraceLoggingWriteStop(...) ((void)0)
 #define TraceLoggingWriteTagged(...) ((void)0)
 #define TraceLoggingProviderEnabled(...) false

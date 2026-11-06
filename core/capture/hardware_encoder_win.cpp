@@ -505,7 +505,9 @@ std::string hardware_encoder::input_path() const
 		return std::format("{}, {}", selected, cuda_input ? "CUDA input" : copy_input ? "GPU copy into D3D11 frames" : "GPU readback");
 	if (d3d_input)
 		return std::format("{}, GPU (Desktop Duplication -> D3D11 video processor)", selected);
-	return std::format("{}, CPU (Desktop Duplication)", selected);
+	if (!codec) // set up with the first frame: GPU frames unless that fails (logged then)
+		return std::format("{}, Desktop Duplication", selected);
+	return std::format("{}, CPU (Desktop Duplication readback)", selected);
 }
 
 // opens the first working encoder for `input` (a software format, or CUDA frames of `frames`)

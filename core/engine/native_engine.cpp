@@ -155,6 +155,8 @@ struct native_engine::session
 	bool gaze_seen = false;
 	bool spacewarp_logged = false;
 	bool newer_headset_reported = false; // UpdateRequired seen
+	QString host;            // the headset's address (messaging): stream connections from elsewhere are not its
+	qint64 started_ms = 0;
 	pulse_client * pulse = nullptr;
 	// audio routing to undo when the session ends (or the mode changes)
 	std::optional<uint32_t> audio_sink_module, mic_module;
@@ -640,8 +642,20 @@ void native_engine::on_messaging_connection()
 	{
 		s->setSocketOption(QAbstractSocket::LowDelayOption, 1);
 		QString host = host_of(s->peerAddress());
+		// a headset reachable on two addresses (Wi-Fi + hotspot, two PC adapters) connects through both at once and
+		// keeps one: a second address right after a session started must not replace it
+		if (current && current->messaging && current->messaging->state() == QAbstractSocket::ConnectedState &&
+		    current->host != host && QDateTime::currentMSecsSinceEpoch() - current->started_ms < 5000)
+		{
+			info(QString("[messaging] connection from %1 ignored: the session with %2 just started").arg(host, current->host));
+			s->abort();
+			s->deleteLater();
+			continue;
+		}
 		current = std::make_unique<session>();
 		current->messaging = s;
+		current->host = host;
+		current->started_ms = QDateTime::currentMSecsSinceEpoch();
 		current->encrypted = computer.encrypt_local;
 		current->pulse = pulse_audio();
 		current->reader = std::make_unique<aes_stream_reader>(computer.key, computer.iv);
@@ -806,15 +820,26 @@ void native_engine::on_messaging_connection()
 	}
 }
 
+// a stream connection belongs to the session when it comes from the headset's messaging address
+bool native_engine::from_session_host(QTcpSocket * s)
+{
+	const QString host = host_of(s->peerAddress());
+	if (current->host.isEmpty() || host == current->host)
+		return true;
+	info(QString("[network] %1 is not the session's headset (%2): connection closed").arg(host, current->host));
+	return false;
+}
+
 void native_engine::on_data_connection()
 {
 	while (QTcpSocket * s = data_server->nextPendingConnection())
 	{
 		s->setSocketOption(QAbstractSocket::LowDelayOption, 1);
 		info(QString("[data] connection from %1").arg(host_of(s->peerAddress())));
-		if (!current)
+		if (!current || !from_session_host(s))
 		{
 			s->abort();
+			s->deleteLater();
 			continue;
 		}
 		current->data = s;
@@ -934,9 +959,10 @@ void native_engine::on_audio_connection()
 	{
 		s->setSocketOption(QAbstractSocket::LowDelayOption, 1);
 		info(QString("[audio] connection from %1").arg(host_of(s->peerAddress())));
-		if (!current)
+		if (!current || !from_session_host(s))
 		{
 			s->abort();
+			s->deleteLater();
 			continue;
 		}
 		current->audio_socket = s;
@@ -987,9 +1013,10 @@ void native_engine::on_video_connection()
 	{
 		s->setSocketOption(QAbstractSocket::LowDelayOption, 1);
 		info(QString("[video] connection from %1").arg(host_of(s->peerAddress())));
-		if (!current)
+		if (!current || !from_session_host(s))
 		{
 			s->abort();
+			s->deleteLater();
 			continue;
 		}
 		current->video_socket = s;
@@ -2454,6 +2481,7 @@ void native_engine::setup_audio_output(session * sess)
 	// WASAPI loopback of the default output; "VR headset only" mutes the PC's speakers while streaming (no virtual
 	// output device on Windows without a driver)
 	device = options.audio_mode == 1 ? "mute-speakers" : "default";
+	sess->audio.reset(); // a previous sender restores the speakers before the new one mutes them
 	sess->audio = std::make_unique<desktop_audio_sender>(*sess->audio_out, device, audio_enabled);
 	sess->audio->set_paused(bool(sess->player));
 	info(QString("[audio] %1: capturing the default output -> headset (s16le 48 kHz stereo, 5 ms)%2%3")

@@ -101,6 +101,7 @@ private:
 	void on_data_connection();
 	void on_audio_connection();
 	void setup_audio_output(session *);
+	bool from_session_host(class QTcpSocket *);
 	void on_mic_packet(session *, const uint8_t * pcm, size_t size);
 	void save_screenshot(const bytes & payload);
 	void update_gamepad(session *, const bytes & frame_data);
