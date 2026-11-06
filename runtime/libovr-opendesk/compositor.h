@@ -53,6 +53,7 @@ struct swapchain
 #ifdef _WIN32
 	std::vector<ID3D11Texture2D *> textures; // D3D11 mode: what the app renders into (`shared` imports them)
 	uint32_t dxgi_format = 0;
+	uint32_t dxgi_view_format = 0; // typed (dxgi_format may be typeless): what views of it use
 	uint32_t mip_levels = 1;
 	bool dxvk = false; // `shared` are DXVK's own images (not ours to destroy), in whatever layout DXVK keeps them
 #endif

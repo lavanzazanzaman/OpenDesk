@@ -25,6 +25,7 @@
 #include <thread>
 #include <tuple>
 #ifdef _WIN32
+#include "mirror_d3d11.h"
 #include <OVR_CAPI_Audio.h>
 #include <OVR_CAPI_D3D.h>
 #include <d3d11_4.h>
@@ -232,6 +233,7 @@ struct session_state
 	uint32_t vk_family = 0;
 #ifdef _WIN32
 	struct ID3D11Device * d3d_device = nullptr; // D3D11 mode: the compositor's app device
+	std::vector<od::ovr::mirror_d3d11 *> mirrors; // mirror textures of this session (owned by their ovrMirrorTexture)
 #endif
 	std::unique_ptr<compositor> comp;
 	frame_submitter submitter; // after comp and client: stops before they go away
@@ -1366,6 +1368,10 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 		                                     cfg.foveated ? info.fovea_top_left : nullptr);
 		if (double took = now_seconds() - t0; took > 0.5)
 			report("compositing one frame took %.0f ms (GPU busy or stalled)", took * 1000);
+#ifdef _WIN32
+		for (auto * mirror: s->mirrors)
+			mirror->update(list);
+#endif
 		if (!composited)
 			return ovrSuccess;
 	}
@@ -1439,15 +1445,18 @@ compositor * ensure_compositor_d3d11(session_state * s, ID3D11Device * device)
 
 struct mirror_texture
 {
-	ID3D11Texture2D * texture = nullptr;
-	~mirror_texture()
-	{
-		if (texture)
-			texture->Release();
-	}
+	session_state * session = nullptr;
+	std::unique_ptr<od::ovr::mirror_d3d11> view;
 };
 void destroy_mirror(mirror_texture * m)
 {
+	if (!m)
+		return;
+	if (m->session)
+	{
+		std::lock_guard lock(m->session->mutex);
+		std::erase(m->session->mirrors, m->view.get());
+	}
 	delete m;
 }
 
@@ -1515,6 +1524,7 @@ ovr_CreateTextureSwapChainDX(ovrSession session, IUnknown * d3dPtr, const ovrTex
 		        uint32_t(std::max(desc->ArraySize, 1)) * (cube ? 6 : 1), uint32_t(desc->MipLevels), uint32_t(desc->SampleCount), count, depth,
 		        cube, (desc->BindFlags & ovrTextureBind_DX_RenderTarget) || !(desc->BindFlags & ovrTextureBind_DX_UnorderedAccess),
 		        (desc->BindFlags & ovrTextureBind_DX_UnorderedAccess) != 0, typeless);
+		chain->images->dxgi_view_format = uint32_t(dxgi.typed);
 		*out = reinterpret_cast<ovrTextureSwapChain>(chain.release());
 		return ovrSuccess;
 	}
@@ -1533,9 +1543,9 @@ ovr_GetTextureSwapChainBufferDX(ovrSession, ovrTextureSwapChain chain, int index
 	return SUCCEEDED(c->images->textures[size_t(index)]->QueryInterface(iid, out)) ? ovrSuccess : ovrError_InvalidParameter;
 }
 
-// the desktop mirror: a texture of the requested size, black (the stream itself is the headset's view)
+// the desktop mirror: the eye(s) the options ask for, refreshed at every ovr_EndFrame (mirror_d3d11.h)
 OVR_PUBLIC_FUNCTION(ovrResult)
-ovr_CreateMirrorTextureWithOptionsDX(ovrSession, IUnknown * d3dPtr, const ovrMirrorTextureDesc * desc, ovrMirrorTexture * out)
+ovr_CreateMirrorTextureWithOptionsDX(ovrSession session, IUnknown * d3dPtr, const ovrMirrorTextureDesc * desc, ovrMirrorTexture * out)
 {
 	if (!d3dPtr || !desc || !out)
 		return ovrError_InvalidParameter;
@@ -1543,18 +1553,20 @@ ovr_CreateMirrorTextureWithOptionsDX(ovrSession, IUnknown * d3dPtr, const ovrMir
 	if (FAILED(d3dPtr->QueryInterface(__uuidof(ID3D11Device), reinterpret_cast<void **>(&device))))
 		return ovrError_Unsupported;
 	const dxgi_formats dxgi = dxgi_for(desc->Format);
-	D3D11_TEXTURE2D_DESC td{};
-	td.Width = UINT(std::max(desc->Width, 1));
-	td.Height = UINT(std::max(desc->Height, 1));
-	td.MipLevels = td.ArraySize = 1;
-	td.Format = (desc->MiscFlags & ovrTextureMisc_DX_Typeless) ? dxgi.typeless : dxgi.typed;
-	td.SampleDesc.Count = 1;
-	td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 	auto m = std::make_unique<mirror_texture>();
-	const HRESULT hr = td.Format == DXGI_FORMAT_UNKNOWN ? E_INVALIDARG : device->CreateTexture2D(&td, nullptr, &m->texture);
+	if (dxgi.typed != DXGI_FORMAT_UNKNOWN)
+		m->view = std::make_unique<od::ovr::mirror_d3d11>(device, UINT(std::max(desc->Width, 1)), UINT(std::max(desc->Height, 1)),
+		                                                  (desc->MiscFlags & ovrTextureMisc_DX_Typeless) ? dxgi.typeless : dxgi.typed,
+		                                                  dxgi.typed, unsigned(desc->MirrorOptions));
 	device->Release();
-	if (FAILED(hr))
+	if (!m->view || !m->view->texture())
 		return ovrError_InvalidParameter;
+	if (auto * s = S(session))
+	{
+		std::lock_guard lock(s->mutex);
+		m->session = s;
+		s->mirrors.push_back(m->view.get());
+	}
 	*out = reinterpret_cast<ovrMirrorTexture>(m.release());
 	return ovrSuccess;
 }
@@ -1567,9 +1579,9 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_CreateMirrorTextureDX(ovrSession session, IUn
 OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetMirrorTextureBufferDX(ovrSession, ovrMirrorTexture mirror, IID iid, void ** out)
 {
 	auto * m = reinterpret_cast<mirror_texture *>(mirror);
-	if (!m || !m->texture || !out)
+	if (!m || !m->view || !m->view->texture() || !out)
 		return ovrError_InvalidParameter;
-	return SUCCEEDED(m->texture->QueryInterface(iid, out)) ? ovrSuccess : ovrError_InvalidParameter;
+	return SUCCEEDED(m->view->texture()->QueryInterface(iid, out)) ? ovrSuccess : ovrError_InvalidParameter;
 }
 
 OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetAudioDeviceOutGuidStr(WCHAR deviceOutStrBuffer[OVR_AUDIO_MAX_DEVICE_STR_SIZE])

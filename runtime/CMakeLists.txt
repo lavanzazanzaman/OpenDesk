@@ -37,6 +37,7 @@ if(WIN32)
     add_library(ovr-vd SHARED
         libovr-opendesk/ovr_vd.cpp
         libovr-opendesk/compositor.cpp libovr-opendesk/compositor.h
+        libovr-opendesk/mirror_d3d11.cpp libovr-opendesk/mirror_d3d11.h
         libovr-opendesk/math.h
         ${SHADER_OUT}/composite.spv.inc ${SHADER_OUT}/composite_ms.spv.inc ${SHADER_OUT}/yuv.spv.inc)
     target_include_directories(ovr-vd PRIVATE ${SHADER_OUT} ${OPENDESK_XR_EXTERNAL}/LibOVR/Include ${OPENDESK_XR_EXTERNAL}/LibOVR/Include/Extras)
