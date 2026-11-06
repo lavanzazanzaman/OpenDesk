@@ -25,6 +25,10 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_PAGE_LICENSE "..\..\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+; start the streamer as the signed-in user (setup runs elevated; explorer.exe hands it to the user's session)
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_TEXT "Start OpenDesk Streamer"
+!define MUI_FINISHPAGE_RUN_FUNCTION StartStreamer
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -32,7 +36,109 @@ SetCompressor /SOLID lzma
 
 !insertmacro MUI_LANGUAGE "English"
 
+Function StartStreamer
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\OpenDesk.exe"'
+FunctionEnd
+
+; Updating over a running OpenDesk: Windows locks the files of running programs, so before any file is replaced
+;   - the streamer is closed (asked first; a silent setup closes it),
+;   - OpenDesk Service is stopped (restarted by its section below),
+;   - a VR game still holding OpenDesk XR / xrizer has to be closed (asked; a silent setup fails with exit code 2).
+; "In use" = the file can't be opened for writing (no process-list plugin needed).
+!macro OPENDESK_CLOSE_FUNCTIONS UN
+Function ${UN}FileBusy ; $R0 = file -> $R1 = 1 when a running program holds it
+  StrCpy $R1 0
+  IfFileExists $R0 0 busy_done
+  ClearErrors
+  FileOpen $R2 $R0 a
+  IfErrors 0 busy_free
+  StrCpy $R1 1
+  Goto busy_done
+  busy_free:
+  FileClose $R2
+  busy_done:
+FunctionEnd
+
+Function ${UN}StopService
+  StrCpy $R0 "$INSTDIR\opendesk-service.exe"
+  Call ${UN}FileBusy
+  StrCmp $R1 0 service_done
+  DetailPrint "Stopping OpenDesk Service to update it..."
+  nsExec::ExecToLog 'sc stop OpenDeskService'
+  StrCpy $R3 0
+  service_wait:
+  Sleep 500
+  Call ${UN}FileBusy
+  StrCmp $R1 0 service_done
+  IntOp $R3 $R3 + 1
+  IntCmp $R3 20 0 service_wait
+  nsExec::ExecToLog 'taskkill /F /IM opendesk-service.exe'
+  Sleep 1000
+  service_done:
+FunctionEnd
+
+Function ${UN}CloseStreamer
+  StrCpy $R0 "$INSTDIR\OpenDesk.exe"
+  Call ${UN}FileBusy
+  StrCmp $R1 0 streamer_done
+  IfSilent streamer_close
+  MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "OpenDesk Streamer is running and has to be closed to finish.$\r$\n$\r$\nOK closes it now (a headset streaming from this PC disconnects; you can start it again at the end).$\r$\nCancel stops the setup." IDOK streamer_close
+  Abort
+  streamer_close:
+  DetailPrint "Closing OpenDesk Streamer..."
+  nsExec::ExecToLog 'taskkill /IM OpenDesk.exe'
+  StrCpy $R3 0
+  streamer_wait:
+  Sleep 500
+  Call ${UN}FileBusy
+  StrCmp $R1 0 streamer_done
+  IntOp $R3 $R3 + 1
+  IntCmp $R3 6 0 streamer_wait ; 3 s to close by itself, then it is ended
+  StrCmp $R3 6 0 +2
+  nsExec::ExecToLog 'taskkill /F /IM OpenDesk.exe'
+  IntCmp $R3 20 0 streamer_wait
+  IfSilent +3
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "OpenDesk Streamer did not close. Close it (tray icon > Quit), then click Retry." IDRETRY streamer_close
+  Abort
+  SetErrorLevel 2
+  Abort
+  streamer_done:
+FunctionEnd
+
+Function ${UN}CheckGames
+  games_check:
+  StrCpy $R0 "$INSTDIR\runtime\opendesk-openxr.dll"
+  Call ${UN}FileBusy
+  StrCmp $R1 1 games_busy
+  StrCpy $R0 "$INSTDIR\runtime\ovr-vd.dll"
+  Call ${UN}FileBusy
+  StrCmp $R1 1 games_busy
+  StrCpy $R0 "$INSTDIR\xrizer\bin\win64\vrclient_x64.dll"
+  Call ${UN}FileBusy
+  StrCmp $R1 1 games_busy
+  Goto games_done
+  games_busy:
+  DetailPrint "In use by a running VR game: $R0"
+  IfSilent games_silent
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "A VR game is still running with OpenDesk XR or xrizer:$\r$\n$R0 is in use.$\r$\n$\r$\nClose the game (and SteamVR, if it runs), then click Retry." IDRETRY games_check
+  Abort
+  games_silent:
+  SetErrorLevel 2
+  Abort
+  games_done:
+FunctionEnd
+
+Function ${UN}PrepareFiles
+  Call ${UN}CloseStreamer
+  Call ${UN}StopService
+  Call ${UN}CheckGames
+FunctionEnd
+!macroend
+!insertmacro OPENDESK_CLOSE_FUNCTIONS ""
+!insertmacro OPENDESK_CLOSE_FUNCTIONS "un."
+
 Section "OpenDesk Streamer" SecMain
+  Call PrepareFiles
   SetOutPath "$INSTDIR"
   File /r "${STAGE_DIR}\*.*"
 
@@ -85,6 +191,7 @@ Section "Firewall rule" SecFirewall
 SectionEnd
 
 Section "Uninstall"
+  Call un.PrepareFiles
   nsExec::ExecToLog 'sc stop OpenDeskService'
   nsExec::ExecToLog 'sc delete OpenDeskService'
   SetRegView 64
