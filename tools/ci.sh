@@ -225,16 +225,27 @@ package_windows() {
 }
 
 installer_windows() {
-	(cd "$ROOT/tools/windows" && makensis -DAPP_VERSION="${OPENDESK_VERSION:-1.0}" -DSTAGE_DIR="../../dist/OpenDesk" installer.nsi)
+	local version=${OPENDESK_VERSION:-1.0}
+	if command -v makensis >/dev/null; then
+		(cd "$ROOT/tools/windows" && makensis -DAPP_VERSION="$version" -DSTAGE_DIR="../../dist/OpenDesk" installer.nsi) || return 1
+	else # NSIS's Windows build from the sysroot, under Wine (nothing installed on the system)
+		python3 -I "$ROOT/tools/windows/fetch-sysroot.py" "$TOOLCHAIN/win-sysroot" nsis >/dev/null || return 1
+		wine_env
+		(cd "$ROOT/tools/windows" && wine "$SYSROOT/bin/makensis.exe" /V2 -DAPP_VERSION="$version" '-DSTAGE_DIR=..\..\dist\OpenDesk' installer.nsi) ||
+			return 1
+	fi
+	# the portable zip next to it
+	(cd "$ROOT/dist" && rm -f OpenDesk-Windows-x86_64.zip && python3 -I -m zipfile -c OpenDesk-Windows-x86_64.zip OpenDesk) &&
+		sha256sum "$ROOT/dist/OpenDesk-Windows-x86_64-Setup.exe" "$ROOT/dist/OpenDesk-Windows-x86_64.zip"
 }
 
 run_package() {
 	[ -f "$CI/windows/streamer/opendesk-streamer.exe" ] || run_windows
 	step package-windows package_windows
-	if command -v makensis >/dev/null; then
+	if command -v makensis >/dev/null || command -v wine >/dev/null; then
 		step installer-windows installer_windows
 	else
-		skip installer-windows "makensis not installed"
+		skip installer-windows "neither makensis nor wine"
 	fi
 	if [ -x "$ROOT/tools/build-appimage.sh" ] && command -v docker >/dev/null; then
 		step appimage-linux bash "$ROOT/tools/build-appimage.sh"
