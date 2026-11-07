@@ -1682,12 +1682,14 @@ namespace opendesk_openxr {
                 aimPose = Pose::Multiply(oculusAimPose, Pose::Invert(ovrPose));
                 palmPose = Pose::Multiply(oculusPalmPose, Pose::Invert(ovrPose));
 
-                // Quest 3 / 3S (Touch Plus): the calibration above (older Touch controllers, PC runtime) puts grip 60
-                // degrees from aim and 9.5 cm behind it; the headset's own runtime has grip 45 degrees from aim, 2 cm
-                // behind. Measured on a Quest 3 (Quest Browser WebXR: gripSpace in targetRaySpace, both hands). The
-                // headset streams the aim pose, so grip (and palm, which follows grip) come from aim with the
-                // headset's own relation - what OpenXR / OpenVR games see on the headset or through WiVRn.
-                if (startsWith(m_cachedHmdInfo.ProductName, "Meta Quest 3")) {
+                // Touch Plus / Touch Pro (Quest 3, 3S, Pro): the calibration above (Quest 1/2-era Touch, PC runtime)
+                // puts grip 60 degrees from aim and 9.5 cm behind it; the headset's own runtime has grip 45 degrees
+                // from aim, 2 cm behind. Measured on a Quest 3 with Touch Pro controllers (Quest Browser WebXR:
+                // gripSpace in targetRaySpace, both hands); Touch Plus has the same relation. The headset streams the
+                // aim pose, so grip (and palm, which follows grip) come from aim with the headset's own relation -
+                // what OpenXR / OpenVR games see on the headset or through WiVRn. Quest 1/2 keep the calibration.
+                if (startsWith(m_cachedHmdInfo.ProductName, "Meta Quest 3") ||
+                    startsWith(m_cachedHmdInfo.ProductName, "Meta Quest Pro")) {
                     // left hand; the right hand is mirrored below like all controller poses here
                     const XrPosef questGripInAim{{0.382319f, 0.040299f, -0.016692f, 0.923000f},
                                                  {-0.007328f, -0.015858f, 0.019500f}};
