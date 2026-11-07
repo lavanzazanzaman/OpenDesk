@@ -34,5 +34,6 @@ private:
 
 	QList<SetupItem> items_;
 	QVBoxLayout * list_;
+	class QLabel * summary_ = nullptr;
 	class QPushButton * fixButton_;
 };

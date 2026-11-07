@@ -57,20 +57,20 @@ MainWindow::MainWindow(Engine & engine) :
 	strip->setObjectName("tabStrip");
 	strip->setAttribute(Qt::WA_StyledBackground);
 	auto * stripLayout = new QVBoxLayout(strip);
-	stripLayout->setContentsMargins(0, 8, 0, 0); // ACCOUNTS tab has Padding="16 16 0 0", Height 56
+	stripLayout->setContentsMargins(0, 8, 0, 8);
 	stripLayout->setSpacing(0);
 	tabs_ = new QButtonGroup(this);
 	stack_ = new QStackedWidget;
 
 	accounts_ = new AccountsPage(engine_);
 	const QList<std::pair<QString, QWidget *>> pages{
+	        {"GENERAL", makeGeneralPage(engine_)},
 	        {"ACCOUNTS", accounts_},
 	        {"STREAMING", makeStreamingPage(engine_)},
 	        {"VR", makeVRPage(engine_)},
 	        {"AUDIO && INPUT", makeAudioInputPage(engine_)},
 	        {"SHORTCUTS", makeShortcutsPage()},
-	        {"GENERAL", makeGeneralPage(engine_)},
-	        {"ABOUT", new AboutPage(engine_)},
+	        {"ABOUT", new AboutPage(engine_)}, // last: pinned to the bottom of the strip
 	};
 	for (int i = 0; i < pages.size(); ++i)
 	{
@@ -79,10 +79,11 @@ MainWindow::MainWindow(Engine & engine) :
 		b->setCheckable(true);
 		b->setCursor(Qt::PointingHandCursor);
 		tabs_->addButton(b, i);
+		if (i == pages.size() - 1)
+			stripLayout->addStretch(); // About apart from the settings, at the bottom
 		stripLayout->addWidget(b);
 		stack_->addWidget(pages[i].second);
 	}
-	stripLayout->addStretch();
 	connect(tabs_, &QButtonGroup::idClicked, this, [this](int id) {
 		stack_->setCurrentIndex(id);
 		StreamerSettings::instance().selectedTab = id;
@@ -90,7 +91,7 @@ MainWindow::MainWindow(Engine & engine) :
 	});
 	int tab = std::clamp(StreamerSettings::instance().selectedTab, 0, int(pages.size()) - 1);
 	if (!StreamerSettings::instance().hasValidAccountID())
-		tab = 0;
+		tab = 1; // ACCOUNTS
 	tabs_->button(tab)->setChecked(true);
 	stack_->setCurrentIndex(tab);
 
@@ -290,6 +291,7 @@ bool MainWindow::screenshotTabs(const QString & dir)
 	SetupDialog check(this);
 	check.show();
 	QApplication::processEvents();
+	QApplication::processEvents(); // the queued re-size after the rows
 	return check.grab().save(dir + "/setup.png");
 }
 

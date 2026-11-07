@@ -116,3 +116,8 @@ QCheckBox#switch::indicator:hover { border: none; }
 QLabel#settingTitle:disabled, QLabel#settingDescription:disabled { color: #5E5A6B; }
 QSlider::sub-page:horizontal:disabled { background: #3A3450; }
 QSlider::handle:horizontal:disabled { background: #5E5A6B; }
+QLabel#settingWarning { color: #F5A524; font-size: 12px; }
+QLabel#summaryOk { color: #46A758; font-size: 13px; font-weight: 600; padding: 2px 0 4px 2px; }
+QLabel#summaryWarning { color: #F5A524; font-size: 13px; font-weight: 600; padding: 2px 0 4px 2px; }
+QScrollArea#setupScroll, QScrollArea#setupScroll > QWidget > QWidget#qt_scrollarea_viewport { background: transparent; border: none; }
+QScrollArea#setupScroll QWidget#qt_scrollarea_viewport { background: transparent; }

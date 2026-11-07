@@ -1,6 +1,7 @@
 #ifndef _WIN32 // Linux system check; the Windows checks are below
 #include "app_paths.h"
 #include "setup.h"
+#include "setup_rows.h"
 #include "settings.h"
 #include "hardware_encoder.h"
 #include "games.h"
@@ -461,7 +462,7 @@ SetupDialog::SetupDialog(QWidget * parent) :
 {
 	setObjectName("vdDialog");
 	setWindowTitle("OpenDesk Streamer - System check");
-	setMinimumWidth(620);
+	setMinimumWidth(680);
 	auto * v = new QVBoxLayout(this);
 
 	auto * title = new QLabel("System check");
@@ -473,10 +474,7 @@ SetupDialog::SetupDialog(QWidget * parent) :
 	v->addWidget(note);
 	v->addSpacing(6);
 
-	auto * host = new QWidget;
-	list_ = new QVBoxLayout(host);
-	list_->setContentsMargins(0, 0, 0, 0);
-	v->addWidget(host);
+	list_ = makeSetupList(v, summary_);
 
 	auto * startup = new QCheckBox("Check at startup");
 	startup->setChecked(StreamerSettings::instance().checkSetupAtStartup);
@@ -516,38 +514,12 @@ bool SetupDialog::hasProblems() const
 
 void SetupDialog::refresh()
 {
-	while (QLayoutItem * item = list_->takeAt(0))
-	{
-		if (item->widget())
-		{
-			item->widget()->hide();
-			item->widget()->deleteLater();
-		}
-		delete item;
-	}
 	items_ = runSetupChecks();
+	fillSetupRows(list_, summary_, items_);
+	QMetaObject::invokeMethod(this, [this] { adjustSize(); }, Qt::QueuedConnection); // wrapped details: height for the new rows
 	bool fixable = false;
 	for (const auto & item: items_)
-	{
-		auto * row = new QWidget;
-		auto * h = new QHBoxLayout(row);
-		h->setContentsMargins(0, 2, 0, 2);
-		auto * icon = new QLabel;
-		QPixmap pix(item.ok ? ":/assets/opendesk/info.png" : ":/assets/opendesk/warning.png");
-		if (pix.isNull())
-			icon->setText(item.ok ? "OK" : "!");
-		else
-			icon->setPixmap(pix);
-		icon->setFixedWidth(24);
-		auto * text = new QLabel(QString("<b>%1</b><br><span style=\"color:%2\">%3</span>")
-		                                 .arg(item.title.toHtmlEscaped(), item.ok ? "#808080" : "#FFA500", item.detail.toHtmlEscaped()));
-		text->setWordWrap(true);
-		text->setObjectName("aboutValue");
-		h->addWidget(icon, 0, Qt::AlignTop);
-		h->addWidget(text, 1);
-		list_->addWidget(row);
 		fixable |= !item.ok && (!item.rootFix.isEmpty() || item.userFix);
-	}
 	fixButton_->setEnabled(fixable);
 }
 
@@ -604,6 +576,7 @@ void SetupDialog::fix()
 #else // _WIN32
 
 #include "setup.h"
+#include "setup_rows.h"
 #include "settings.h"
 
 #include "hardware_encoder.h"
@@ -767,7 +740,7 @@ SetupDialog::SetupDialog(QWidget * parent) :
 {
 	setObjectName("vdDialog");
 	setWindowTitle("OpenDesk Streamer - System check");
-	setMinimumWidth(620);
+	setMinimumWidth(680);
 	auto * v = new QVBoxLayout(this);
 
 	auto * title = new QLabel("System check");
@@ -779,10 +752,7 @@ SetupDialog::SetupDialog(QWidget * parent) :
 	v->addWidget(note);
 	v->addSpacing(6);
 
-	auto * host = new QWidget;
-	list_ = new QVBoxLayout(host);
-	list_->setContentsMargins(0, 0, 0, 0);
-	v->addWidget(host);
+	list_ = makeSetupList(v, summary_);
 
 	auto * startup = new QCheckBox("Check at startup");
 	startup->setChecked(StreamerSettings::instance().checkSetupAtStartup);
@@ -812,20 +782,9 @@ bool SetupDialog::hasProblems() const
 
 void SetupDialog::refresh()
 {
-	while (QLayoutItem * i = list_->takeAt(0))
-	{
-		if (i->widget())
-			i->widget()->deleteLater();
-		delete i;
-	}
 	items_ = runSetupChecks();
-	for (const SetupItem & i: items_)
-	{
-		auto * row = new QLabel(QString("%1  %2\n%3").arg(i.ok ? "[ok]" : "[!]", i.title, i.detail));
-		row->setWordWrap(true);
-		row->setObjectName(i.ok ? "accountId" : "statusLine");
-		list_->addWidget(row);
-	}
+	fillSetupRows(list_, summary_, items_);
+	QMetaObject::invokeMethod(this, [this] { adjustSize(); }, Qt::QueuedConnection); // wrapped details: height for the new rows
 	fixButton_->setEnabled(std::any_of(items_.begin(), items_.end(), [](const SetupItem & i) { return !i.ok && i.userFix; }));
 }
 
