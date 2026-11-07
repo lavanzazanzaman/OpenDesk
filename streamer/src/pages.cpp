@@ -213,7 +213,7 @@ SettingsPage settingsPage(std::function<void()> reset, const QString & note = {}
 }
 
 // A titled group of settings
-QVBoxLayout * card(SettingsPage & p, const QString & title)
+QVBoxLayout * card(QVBoxLayout * cards, const QString & title)
 {
 	auto * frame = new QFrame;
 	frame->setObjectName("card");
@@ -224,8 +224,19 @@ QVBoxLayout * card(SettingsPage & p, const QString & title)
 	t->setObjectName("cardTitle");
 	t->setContentsMargins(0, 0, 0, 4);
 	v->addWidget(t);
-	p.cards->addWidget(frame);
+	cards->addWidget(frame);
 	return v;
+}
+
+QVBoxLayout * card(SettingsPage & p, const QString & title)
+{
+	return card(p.cards, title);
+}
+
+// an icon from the assets, sharp at the screen's pixel ratio
+QPixmap icon(const QString & name, int size)
+{
+	return QIcon(":/assets/opendesk/" + name).pixmap(QSize(size, size), qApp->devicePixelRatio());
 }
 
 // One setting: name and a short description on the left, its control on the right. The long explanation is the
@@ -285,16 +296,16 @@ QWidget * toggleRow(QVBoxLayout * card, const QString & title, const QString & d
 
 // ---------------------------------------------------------------------------------------------- ACCOUNTS
 
-AccountsPage::AccountsPage(Engine &) :
-        editing_(!StreamerSettings::instance().hasValidAccountID())
+AccountsPage::AccountsPage(Engine &)
 {
 	page(this);
 	auto * outer = new QVBoxLayout(this);
-	outer->setContentsMargins(0, 0, 0, 0);
+	outer->setContentsMargins(16, 12, 8, 10);
 	auto * content = page();
 	list_ = new QVBoxLayout(content);
-	list_->setContentsMargins(24, 8, 8, 8);
-	outer->addWidget(scrollArea(content));
+	list_->setContentsMargins(0, 0, 8, 0);
+	list_->setSpacing(12);
+	outer->addWidget(scrollArea(content), 1);
 	rebuild();
 }
 
@@ -312,124 +323,102 @@ void AccountsPage::rebuild()
 	clearLayout(list_);
 	auto & s = StreamerSettings::instance();
 
-	for (const auto & p: platforms())
+	if (!s.hasValidAccountID())
 	{
-		const QStringList ids = s.accounts.value(int(p.platform));
-		if (ids.isEmpty())
-			continue;
-		auto * header = new QWidget;
-		auto * hh = new QHBoxLayout(header);
-		hh->setContentsMargins(4, 0, 0, 0);
-		auto * icon = new QLabel;
-		icon->setPixmap(asset(p.icon).scaled(16, 16, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-		auto * name = new QLabel(p.name);
-		name->setObjectName("platformName");
-		hh->addWidget(icon);
-		hh->addWidget(name);
-		hh->addStretch();
-		list_->addWidget(header);
+		auto * c = card(list_, "Get started");
+		auto * warn = new QLabel("Add the account of your headset to make this computer accessible.\n"
+		                         "Open OpenDesk on the headset and look for this computer: with \"Ask for computer access\" on\n"
+		                         "(General tab) you are asked here, or add the account ID yourself below.");
+		warn->setObjectName("warning");
+		warn->setWordWrap(true);
+		warn->setContentsMargins(0, 4, 0, 8);
+		c->addWidget(warn);
+	}
 
-		if (!editing_)
+	auto * c = card(list_, "Linked accounts");
+	for (const auto & p: platforms())
+		for (const QString & id: s.accounts.value(int(p.platform)))
 		{
-			auto * text = new QLabel(ids.join(", "));
-			text->setObjectName("accountIds");
-			text->setWordWrap(true);
-			text->setContentsMargins(4, 0, 6, 6);
-			list_->addWidget(text);
-			continue;
-		}
-		for (const QString & id: ids)
-		{
-			auto * row = new QWidget;
-			auto * rh = new QHBoxLayout(row);
-			rh->setContentsMargins(4, 0, 0, 0);
-			auto * label = new QLabel(id);
-			label->setObjectName("aboutValue");
-			auto * remove = new QPushButton;
-			remove->setObjectName("imageButton");
-			remove->setIcon(asset("clear20.png"));
-			remove->setIconSize({20, 20});
-			remove->setToolTip("Remove");
+			if (c->count() > 1)
+			{
+				auto * line = new QFrame;
+				line->setObjectName("rowSeparator");
+				line->setFixedHeight(1);
+				c->addWidget(line);
+			}
+			auto * r = new QWidget;
+			auto * h = new QHBoxLayout(r);
+			h->setContentsMargins(0, 8, 0, 8);
+			h->setSpacing(12);
+			auto * badge = new QLabel;
+			badge->setPixmap(icon(p.icon, 28));
+			auto * text = new QVBoxLayout;
+			text->setSpacing(1);
+			auto * name = new QLabel(id);
+			name->setObjectName("settingTitle");
+			name->setTextInteractionFlags(Qt::TextSelectableByMouse);
+			auto * platform = new QLabel(p.name);
+			platform->setObjectName("settingDescription");
+			text->addWidget(name);
+			text->addWidget(platform);
+			auto * remove = new QPushButton("Remove");
+			remove->setObjectName("dangerButton");
 			connect(remove, &QPushButton::clicked, this, [this, platform = int(p.platform), id] {
 				auto & st = StreamerSettings::instance();
 				st.accounts[platform].removeAll(id);
 				st.save();
 				QMetaObject::invokeMethod(this, &AccountsPage::rebuild, Qt::QueuedConnection);
 			});
-			rh->addWidget(label);
-			rh->addWidget(remove);
-			rh->addStretch();
-			list_->addWidget(row);
+			h->addWidget(badge);
+			h->addLayout(text, 1);
+			h->addWidget(remove);
+			c->addWidget(r);
 		}
-	}
-
-	if (editing_ && !s.hasValidAccountID())
+	if (c->count() == 1)
 	{
-		auto * warn = new QLabel("You must add an account to make your computer accessible\n"
-		                         "Follow the instructions on your device");
-		warn->setObjectName("warning");
-		warn->setWordWrap(true);
-		warn->setContentsMargins(0, 0, 24, 18);
-		list_->addWidget(warn);
+		auto * none = new QLabel("No accounts yet");
+		none->setObjectName("settingDescription");
+		none->setContentsMargins(0, 6, 0, 6);
+		c->addWidget(none);
 	}
 
-	if (editing_)
+	auto * add = new QPushButton("Add account");
+	auto * menu = new QMenu(add);
+	for (const auto & p: platforms())
 	{
-		auto * add = new QPushButton("Add account ▾");
-		add->setObjectName("linkButton");
-		auto * menu = new QMenu(add);
-		for (const auto & p: platforms())
-		{
-			menu->addAction(QIcon(asset(p.icon)), p.name, this, [this, p] {
-				// Windows resolves a user name through upstream's servers; on Linux we take the AccountID directly
-				// (shown by `sniff`, or accepted from an "Ask for computer access" prompt).
-				QDialog dlg(this);
-				dlg.setObjectName("vdDialog");
-				dlg.setWindowTitle("Add Account");
-				auto * v = new QVBoxLayout(&dlg);
-				auto * title = new QLabel(QString("Add %1 account").arg(p.name));
-				title->setObjectName("platformName");
-				auto * hint = new QLabel("Enter the account ID of the headset.\n"
-				                         "Tip: leave \"Ask for computer access\" enabled and the headset will\n"
-				                         "prompt here when it searches for computers.");
-				hint->setObjectName("accountIds");
-				auto * edit = new QLineEdit;
-				auto * buttons = new QDialogButtonBox;
-				buttons->addButton("Add", QDialogButtonBox::AcceptRole);
-				buttons->addButton("Cancel", QDialogButtonBox::RejectRole);
-				connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-				connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-				v->addWidget(title);
-				v->addWidget(hint);
-				v->addWidget(edit);
-				v->addWidget(buttons);
-				if (dlg.exec() == QDialog::Accepted && !edit->text().trimmed().isEmpty())
-					addAccount(int(p.platform), edit->text().trimmed());
-			});
-		}
-		connect(add, &QPushButton::clicked, add, [add, menu] { menu->popup(add->mapToGlobal(QPoint(0, add->height()))); });
-		auto * row = new QHBoxLayout;
-		row->addWidget(add);
-		row->addStretch();
-		list_->addSpacing(10);
-		list_->addLayout(row);
+		menu->addAction(QIcon(QString(":/assets/opendesk/") + p.icon), p.name, this, [this, p] {
+			QDialog dlg(this);
+			dlg.setObjectName("vdDialog");
+			dlg.setWindowTitle("Add Account");
+			auto * v = new QVBoxLayout(&dlg);
+			v->setContentsMargins(20, 16, 20, 16);
+			v->setSpacing(10);
+			auto * title = new QLabel(QString("Add %1 account").arg(p.name));
+			title->setObjectName("platformName");
+			auto * hint = new QLabel("Enter the account ID of the headset.\n"
+			                         "Tip: leave \"Ask for computer access\" on and the headset will\n"
+			                         "prompt here when it searches for computers.");
+			hint->setObjectName("accountIds");
+			auto * edit = new QLineEdit;
+			auto * buttons = new QDialogButtonBox;
+			buttons->addButton("Add", QDialogButtonBox::AcceptRole);
+			buttons->addButton("Cancel", QDialogButtonBox::RejectRole);
+			connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+			connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+			v->addWidget(title);
+			v->addWidget(hint);
+			v->addWidget(edit);
+			v->addWidget(buttons);
+			if (dlg.exec() == QDialog::Accepted && !edit->text().trimmed().isEmpty())
+				addAccount(int(p.platform), edit->text().trimmed());
+		});
 	}
-
-	// Windows: "Change" (view mode) enters editing; "Save" (editing, needs an account) commits and leaves it
-	auto * change = new QPushButton(editing_ ? "Save" : "Change");
-	change->setVisible(!editing_ || s.hasValidAccountID());
-	connect(change, &QPushButton::clicked, this, [this] {
-		if (editing_)
-			StreamerSettings::instance().save();
-		editing_ = !editing_;
-		QMetaObject::invokeMethod(this, &AccountsPage::rebuild, Qt::QueuedConnection);
-	});
-	auto * row = new QHBoxLayout;
-	row->addStretch();
-	row->addWidget(change);
-	row->addStretch();
-	list_->addSpacing(10);
-	list_->addLayout(row);
+	connect(add, &QPushButton::clicked, add, [add, menu] { menu->popup(add->mapToGlobal(QPoint(0, add->height()))); });
+	auto * buttons = new QHBoxLayout;
+	buttons->setContentsMargins(0, 8, 0, 6);
+	buttons->addWidget(add);
+	buttons->addStretch();
+	c->addLayout(buttons);
 	list_->addStretch();
 }
 
@@ -800,68 +789,80 @@ AboutPage::AboutPage(Engine & engine) :
         engine_(engine)
 {
 	page(this);
-	auto * grid = new QGridLayout(this);
-	grid->setContentsMargins(24, 8, 8, 8);
-	grid->setVerticalSpacing(2);
-	int row = 0;
-	auto add = [&](const QString & key, QWidget * value, const QString & tooltip = {}) {
-		auto * k = new QLabel(key);
-		k->setObjectName("aboutKey");
-		k->setToolTip(tooltip);
-		k->setAlignment(Qt::AlignRight | Qt::AlignTop);
-		grid->addWidget(k, row, 0);
-		grid->addWidget(value, row++, 1);
-	};
-	auto text = [](const QString & t) {
+	auto * outer = new QVBoxLayout(this);
+	outer->setContentsMargins(16, 12, 8, 10);
+	outer->setSpacing(8);
+	auto * content = page();
+	auto * cards = new QVBoxLayout(content);
+	cards->setContentsMargins(0, 0, 8, 0);
+	cards->setSpacing(12);
+	outer->addWidget(scrollArea(content), 1);
+
+	auto value = [](const QString & t) {
 		auto * l = new QLabel(t);
 		l->setObjectName("aboutValue");
+		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 		l->setTextInteractionFlags(Qt::TextSelectableByMouse);
 		return l;
 	};
-	auto link = [](const QString & url) {
-		auto * l = new QLabel(QString("<a href=\"%1\" style=\"color:#A58CFF\">%1</a>").arg(url));
+	auto link = [](const QString & url, const QString & text) {
+		auto * l = new QLabel(QString("<a href=\"%1\" style=\"color:#A58CFF; text-decoration:none\">%2</a>").arg(url, text));
 		l->setObjectName("aboutValue");
+		l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 		l->setOpenExternalLinks(true);
 		return l;
 	};
 
-	headset_ = text("Not connected");
-	codec_ = text("-");
-	latency_ = text("-");
-	ethernet_ = text("-");
-	autoBitrate_ = text("-");
+	headset_ = value("Not connected");
+	codec_ = value("-");
+	ethernet_ = value("-");
+	autoBitrate_ = value("-");
+	latency_ = nullptr;
 
-	add("Graphics Card:", text(sysinfo::graphicsCards()));
-	add("Headset:", headset_);
-	add("Codec:", codec_);
-	add("Latency:", latency_);
-	add("Processor:", text(sysinfo::processor()));
-	add("Hardware Encoder:", text(sysinfo::hasHardwareEncoder() ? "Yes" : "No"),
+	auto * connection = card(cards, "Connection");
+	row(connection, "Headset", {}, headset_);
+	row(connection, "Video", {}, codec_);
+	row(connection, "PC Ethernet", {}, ethernet_, "A wired connection from the PC to the router gives the most stable stream");
+	row(connection, "Automatic bitrate", {}, autoBitrate_);
+	const QString router = sysinfo::routerUrl();
+	row(connection, "Router", "Local network only", router.isEmpty() ? value("-") : link(router, router));
+
+	auto * system = card(cards, "This computer");
+	row(system, "Graphics card", {}, value(sysinfo::graphicsCards()));
+	row(system, "Hardware encoder", {}, value(sysinfo::hasHardwareEncoder() ? "Yes" : "No"),
 	    "A hardware video encoder is required for multi-monitor or VR game streaming");
-	add("Memory:", text(sysinfo::memory()));
-	add("Operating System:", text(sysinfo::operatingSystem()));
-	add("Secure Boot:", text(sysinfo::secureBoot()),
+	row(system, "Processor", {}, value(sysinfo::processor()));
+	row(system, "Memory", {}, value(sysinfo::memory()));
+	row(system, "Operating system", {}, value(sysinfo::operatingSystem()));
+	row(system, "Secure Boot", {}, value(sysinfo::secureBoot()),
 	    "When Secure Boot is disabled in BIOS, it can solve compatibility with some games");
-	add("PC Ethernet:", ethernet_);
-	add("Auto Adjust Bitrate:", autoBitrate_);
-	add("Remote Routing:", text("Not supported: local network only"));
-	QString router = sysinfo::routerUrl();
-	add("Router Settings:", router.isEmpty() ? text("-") : link(router));
-	// open-source projects this project builds on
+
+	auto * about = card(cards, "OpenDesk");
+	row(about, "Streamer version", "Independent open-source PC streamer", value(OPENDESK_VERSION));
+	row(about, "Headset app protocol", "Newest headset app version this streamer speaks", value(OPENDESK_UPSTREAM_VERSION));
 	auto * credits = new QLabel(
-	        "<a href=\"https://github.com/mbucchia/VirtualDesktop-OpenXR\" style=\"color:#A58CFF\">VDXR / OpenDesk XR</a>"
-	        " by Matthieu Bucchianeri (MIT)<br>"
-	        "<a href=\"https://github.com/Supreeeme/xrizer\" style=\"color:#A58CFF\">xrizer</a>"
-	        " by Supreeeme et al. (GPL-3.0)<br>"
-	        "<a href=\"https://github.com/benaclejames/VRCFaceTracking\" style=\"color:#A58CFF\">VRCFaceTracking</a>"
+	        "<a href=\"https://github.com/mbucchia/VirtualDesktop-OpenXR\" style=\"color:#A58CFF; text-decoration:none\">VDXR</a>"
+	        " by Matthieu Bucchianeri (MIT) &middot; "
+	        "<a href=\"https://github.com/Supreeeme/xrizer\" style=\"color:#A58CFF; text-decoration:none\">xrizer</a>"
+	        " by Supreeeme et al. (GPL-3.0) &middot; "
+	        "<a href=\"https://github.com/benaclejames/VRCFaceTracking\" style=\"color:#A58CFF; text-decoration:none\">VRCFaceTracking</a>"
 	        " by benaclejames et al. (Apache-2.0)");
+	credits->setObjectName("settingDescription");
+	credits->setWordWrap(true);
+	credits->setOpenExternalLinks(true);
 	credits->setToolTip("OpenDesk XR is derived from VDXR by Matthieu Bucchianeri (MIT): an OpenXR runtime for OpenDesk.\n"
 	                    "xrizer by Supreeeme and contributors: runs OpenVR games on that runtime; downloaded separately, not part of this program.\n"
 	                    "VRCFaceTracking by benaclejames and contributors: its VRChat face tracking parameters, used by the built-in OSC output.");
-	credits->setObjectName("aboutValue");
-	credits->setOpenExternalLinks(true);
-	add("Credits:", credits);
-	add("Project:", text("Independent open-source PC streamer"));
+	auto * line = new QFrame;
+	line->setObjectName("rowSeparator");
+	line->setFixedHeight(1);
+	about->addWidget(line);
+	auto * creditsTitle = new QLabel("Built on");
+	creditsTitle->setObjectName("settingTitle");
+	creditsTitle->setContentsMargins(0, 8, 0, 0);
+	about->addWidget(creditsTitle);
+	credits->setContentsMargins(0, 1, 0, 8);
+	about->addWidget(credits);
 
 	auto * buttons = new QHBoxLayout;
 	auto * logs = new QPushButton("Show logs");
@@ -871,9 +872,8 @@ AboutPage::AboutPage(Engine & engine) :
 	buttons->addWidget(check);
 	buttons->addWidget(logs);
 	buttons->addStretch();
-	grid->addLayout(buttons, row++, 0, 1, 2);
-	grid->setColumnStretch(1, 1);
-	grid->setRowStretch(row, 1);
+	cards->addLayout(buttons);
+	cards->addStretch();
 
 	connect(&engine, &Engine::headsetChanged, this, &AboutPage::refresh);
 	connect(&engine, &Engine::videoChanged, this, &AboutPage::refresh);
@@ -905,7 +905,6 @@ void AboutPage::refresh()
 	                                      .arg(v["fps"].toInt())
 	                                      .arg(v["kbps"].toInt() / 1000)
 	                                      .arg(v["mode"].toString()));
-	latency_->setText("-");
 
 	QStringList eth;
 	for (const auto & a: engine_.computer["adapters"].toArray())
@@ -914,6 +913,6 @@ void AboutPage::refresh()
 		if (!o["wifi"].toBool() && !o["usb"].toBool())
 			eth << QString("%1 (%2)").arg(o["ip"].toString(), o["gbit"].toBool() ? "1 Gbps+" : "< 1 Gbps");
 	}
-	ethernet_->setText(eth.isEmpty() ? "No" : "Yes - " + eth.join(", "));
+	ethernet_->setText(eth.isEmpty() ? "No" : eth.join(", "));
 	autoBitrate_->setText(StreamerSettings::instance().autoAdjustBitrate ? "Yes" : "No");
 }

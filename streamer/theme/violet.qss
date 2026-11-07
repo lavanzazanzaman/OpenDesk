@@ -10,7 +10,13 @@ QWidget { color: #C9C4D8; font-size: 15px; }
 #body, #tabStrip { background: #15131C; }
 #page, #page QScrollArea, #page QScrollArea > QWidget > QWidget { background: #100F16; border: none; }
 
-#linuxSuffix { color: #B9A8FF; font-size: 17px; }
+QLabel#windowTitle { color: #FFFFFF; font-size: 14px; font-weight: 600; }
+QPushButton#windowButton, QPushButton#closeButton { background: transparent; border: none; border-radius: 0; padding: 0; min-height: 0; min-width: 0; }
+QPushButton#windowButton:hover { background: #262233; }
+QPushButton#closeButton { border-top-right-radius: 10px; }
+QPushButton#closeButton:hover { background: #C42B1C; }
+QLabel#footerStatus { color: #C9C4D8; font-size: 12px; }
+QLabel#footerVersion { color: #6E6A7C; font-size: 12px; }
 
 QPushButton#tabButton {
     background: #15131C; color: #8A8699; font-size: 13px; font-weight: bold; letter-spacing: 1px;

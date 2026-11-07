@@ -22,7 +22,6 @@ public:
 	void addAccount(int platform, const QString & account);
 
 private:
-	bool editing_;
 	QVBoxLayout * list_;
 };
 

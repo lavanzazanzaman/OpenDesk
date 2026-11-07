@@ -28,17 +28,6 @@ namespace
 {
 constexpr int resizeBorder = 8; // WindowChrome ResizeBorderThickness="8"
 
-QPushButton * imageButton(const QString & asset, const QString & tooltip)
-{
-	auto * b = new QPushButton;
-	b->setObjectName("imageButton");
-	b->setIcon(QIcon(":/assets/opendesk/" + asset));
-	b->setIconSize({16, 16});
-	b->setFixedSize(36, 30);
-	b->setToolTip(tooltip);
-	b->setCursor(Qt::ArrowCursor);
-	return b;
-}
 } // namespace
 
 MainWindow::MainWindow(Engine & engine) :
@@ -176,30 +165,40 @@ QWidget * MainWindow::makeHeader()
 	auto * header = new QWidget;
 	header->setObjectName("header");
 	header->setAttribute(Qt::WA_StyledBackground);
-	header->setFixedHeight(48);
+	header->setFixedHeight(44);
 	header->installEventFilter(this);
 	auto * h = new QHBoxLayout(header);
-	h->setContentsMargins(8, 0, 4, 0);
-	h->setSpacing(8);
+	h->setContentsMargins(14, 0, 0, 0);
+	h->setSpacing(0);
 
-	auto * logo = new QLabel("OpenDesk");
-	logo->setObjectName("logo");
-	logo->setAttribute(Qt::WA_TransparentForMouseEvents);
-	auto * suffix = new QLabel("Streamer");
-	suffix->setObjectName("linuxSuffix");
-	suffix->setAttribute(Qt::WA_TransparentForMouseEvents);
-	h->addWidget(logo);
-	h->addWidget(suffix);
+	auto * icon = new QLabel;
+	icon->setPixmap(QIcon(":/assets/opendesk/logo.svg").pixmap(QSize(22, 22), devicePixelRatioF()));
+	icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+	auto * title = new QLabel("OpenDesk <span style=\"color:#8A8699; font-weight:normal\">Streamer</span>");
+	title->setObjectName("windowTitle");
+	title->setTextFormat(Qt::RichText);
+	title->setAttribute(Qt::WA_TransparentForMouseEvents);
+	h->addWidget(icon);
+	h->addSpacing(9);
+	h->addWidget(title);
 	h->addStretch();
 
-	auto * minimize = imageButton("minimize32.png", "Minimize");
-	auto * close = imageButton("close32.png", "Close");
+	auto windowButton = [](const QString & asset, const QString & tooltip, const char * name) {
+		auto * b = new QPushButton;
+		b->setObjectName(name);
+		b->setIcon(QIcon(":/assets/opendesk/" + asset));
+		b->setIconSize({16, 16});
+		b->setFixedSize(46, 44);
+		b->setToolTip(tooltip);
+		b->setCursor(Qt::ArrowCursor);
+		return b;
+	};
+	auto * minimize = windowButton("window-minimize.svg", "Minimize", "windowButton");
+	auto * close = windowButton("window-close.svg", "Close to tray", "closeButton");
 	connect(minimize, &QPushButton::clicked, this, &QWidget::showMinimized);
 	connect(close, &QPushButton::clicked, this, &QWidget::close);
-	h->addWidget(minimize, 0, Qt::AlignTop);
-	h->addWidget(close, 0, Qt::AlignTop);
-	h->setAlignment(minimize, Qt::AlignTop);
-	minimize->setContentsMargins(0, 4, 0, 0);
+	h->addWidget(minimize);
+	h->addWidget(close);
 	return header;
 }
 
@@ -208,25 +207,53 @@ QWidget * MainWindow::makeFooter()
 	auto * footer = new QWidget;
 	footer->setObjectName("footer");
 	footer->setAttribute(Qt::WA_StyledBackground);
-	footer->setFixedHeight(48);
+	footer->setFixedHeight(36);
 	auto * h = new QHBoxLayout(footer);
 	h->setContentsMargins(16, 0, 16, 0);
-	h->setSpacing(6);
-	auto pair = [&](const QString & name, const QString & version, const QString & tooltip) {
-		auto * key = new QLabel(name);
-		key->setObjectName("footerKey");
-		key->setToolTip(tooltip);
-		auto * value = new QLabel(version);
-		value->setObjectName("footerValue");
-		value->setToolTip(tooltip);
-		h->addWidget(key);
-		h->addWidget(value);
-	};
-	pair("Streamer:", OPENDESK_VERSION, "Version of this streamer");
+	h->setSpacing(8);
+	statusDot_ = new QLabel;
+	statusDot_->setFixedSize(8, 8);
+	statusText_ = new QLabel;
+	statusText_->setObjectName("footerStatus");
+	auto * version = new QLabel("v" OPENDESK_VERSION);
+	version->setObjectName("footerVersion");
+	version->setToolTip(QString("OpenDesk Streamer %1 - speaks the headset app's protocol up to %2")
+	                            .arg(OPENDESK_VERSION, OPENDESK_UPSTREAM_VERSION));
+	h->addWidget(statusDot_);
+	h->addWidget(statusText_);
 	h->addStretch();
-	pair("Streamer Support Version:", OPENDESK_UPSTREAM_VERSION,
-	     "The OpenDesk streamer version this speaks the protocol of; the headset app must be exactly this version");
+	h->addWidget(version);
+	connect(&engine_, &Engine::statusChanged, this, &MainWindow::updateFooter);
+	connect(&engine_, &Engine::headsetChanged, this, &MainWindow::updateFooter);
+	updateFooter();
 	return footer;
+}
+
+// the footer: what the streamer is doing right now
+void MainWindow::updateFooter()
+{
+	QString text, color;
+	switch (engine_.status())
+	{
+		case Engine::Status::Stopped:
+			text = "Streamer not running";
+			color = "#E5484D";
+			break;
+		case Engine::Status::Listening:
+			text = "Waiting for a headset";
+			color = "#F5A524";
+			break;
+		case Engine::Status::Connected:
+		{
+			const auto & m = engine_.headsetMobileSettings;
+			text = m.isEmpty() ? QString("Connected")
+			                   : QString("Connected to %1 (%2)").arg(hmdTypeName(m["HmdType"].toInt()), engine_.connectedViaUsb ? "USB" : "Wi-Fi");
+			color = "#46A758";
+			break;
+		}
+	}
+	statusText_->setText(text);
+	statusDot_->setStyleSheet(QString("background: %1; border-radius: 4px;").arg(color));
 }
 
 void MainWindow::paintEvent(QPaintEvent *)

@@ -12,6 +12,7 @@ class AccountsPage;
 class GlobalShortcuts;
 class QButtonGroup;
 class QStackedWidget;
+class QLabel;
 
 class MainWindow : public QWidget
 {
@@ -32,6 +33,7 @@ protected:
 private:
 	QWidget * makeHeader();
 	QWidget * makeFooter();
+	void updateFooter();
 	Qt::Edges edgesAt(QPoint) const;
 	void updateTray(Engine::Status);
 	void onPairingRequest(const QString & account, int platform, const QString & host);
@@ -42,6 +44,8 @@ private:
 	QButtonGroup * tabs_;
 	AccountsPage * accounts_;
 	QWidget * header_;
+	class QLabel * statusDot_ = nullptr;
+	class QLabel * statusText_ = nullptr;
 	QSet<QString> askedAccounts_;
 	GlobalShortcuts * shortcuts_;
 	QMap<QString, QString> boundKeys_;

@@ -11,13 +11,13 @@
 const QList<PlatformInfo> & platforms()
 {
 	static const QList<PlatformInfo> list{
-	        {Platform::OculusQuest, "Meta", "oculusquest.png"},
-	        {Platform::Pico, "Pico", "pico.png"},
-	        {Platform::Vive, "Viveport", "vive.png"},
-	        {Platform::Google, "Google", "google.png"},
-	        {Platform::PlayForDream, "Play for Dream", "playfordream.png"},
-	        {Platform::Apple, "Apple", "apple.png"},
-	        {Platform::Steam, "Steam", "steam.png"},
+	        {Platform::OculusQuest, "Meta", "platform-meta.svg"},
+	        {Platform::Pico, "Pico", "platform-pico.svg"},
+	        {Platform::Vive, "Viveport", "platform-viveport.svg"},
+	        {Platform::Google, "Google", "platform-google.svg"},
+	        {Platform::PlayForDream, "Play for Dream", "platform-playfordream.svg"},
+	        {Platform::Apple, "Apple", "platform-apple.svg"},
+	        {Platform::Steam, "Steam", "platform-steam.svg"},
 	};
 	return list;
 }
