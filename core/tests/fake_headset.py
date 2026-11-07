@@ -277,6 +277,14 @@ if BODY:  # 32 body joint slots (0-17 = joints 0-17, 18-31 = joints 70-83), each
 if __import__("os").environ.get("FOVEATED"):
     # the head turning left at 0.5 rad/s: frames render from a predicted pose - the fovea stays where the gaze says
     struct.pack_into("<3f", fd, 160, 0, 0.5, 0)
+if __import__("os").environ.get("ZERO_POSE"):  # a headset not tracking yet: all-zero head poses first (games must not centre on them)
+    zero = bytearray(fd)
+    struct.pack_into("<4f", zero, 120, 0, 0, 0, 0)
+    for i in range(40):
+        struct.pack_into("<i", zero, 0, i)
+        comp = lz4.block.compress(bytes(zero), store_size=False)
+        data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
+        time.sleep(0.05)
 comp = lz4.block.compress(bytes(fd), store_size=False)
 for i in range(10):
     struct.pack_into("<i", fd, 0, i)

@@ -259,14 +259,24 @@ struct session_state
 
 	frame_data::pose raw_head() const { return frame_data::head(state.frame_data); }
 
-	void recenter(bool keep_height)
+	// The app's forward = where the head looks now. Only from a real head pose: before the headset tracks (or while
+	// it sends an all-zero pose) the forward vector is (0, 0, 0), and atan2(-0, -0) is -180 degrees - games then
+	// started facing backwards. Until a valid pose arrives the raw space is used and the first one centres.
+	bool recenter(bool keep_height)
 	{
 		frame_data::pose h = raw_head();
-		math::vec3 fwd = math::rotate(h.orientation, {0, 0, -1});
-		center_yaw = std::atan2(-fwd[0], -fwd[2]);
+		const auto & q = h.orientation;
+		const float norm = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+		if (norm < 0.5f || norm > 1.5f) // no pose yet (all zero)
+			return false;
+		math::vec3 fwd = math::rotate(math::normalize(h.orientation), {0, 0, -1});
+		if (fwd[0] * fwd[0] + fwd[2] * fwd[2] > 1e-4f) // looking straight up or down: keep the previous yaw
+			center_yaw = std::atan2(-fwd[0], -fwd[2]);
 		float height = keep_height ? center[1] : h.position[1];
 		center = {h.position[0], height, h.position[2]};
 		centered = true;
+		report("recentered: forward = headset yaw %.0f degrees", double(center_yaw) * 180.0 / 3.14159265358979);
+		return true;
 	}
 
 	// raw headset tracking space -> app tracking space (origin type + recenter)
