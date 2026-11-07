@@ -16,6 +16,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFrame>
 #include <QStandardPaths>
 #include <QGridLayout>
 #include <QJsonArray>
@@ -42,7 +43,7 @@
 
 namespace
 {
-constexpr const char * notOnLinux = "\n(not implemented on Linux yet)";
+constexpr const char * notOnLinux = "\n(not implemented yet)";
 
 QPixmap asset(const QString & name)
 {
@@ -172,6 +173,113 @@ QScrollArea * scrollArea(QWidget * content)
 	sa->setFrameShape(QFrame::NoFrame);
 	sa->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 	return sa;
+}
+
+// A settings tab: cards of rows that scroll, "Reset to Defaults" below them
+struct SettingsPage
+{
+	QWidget * widget;
+	QVBoxLayout * cards;
+};
+
+SettingsPage settingsPage(std::function<void()> reset, const QString & note = {})
+{
+	auto * w = page();
+	auto * outer = new QVBoxLayout(w);
+	outer->setContentsMargins(16, 12, 8, 10);
+	outer->setSpacing(8);
+	auto * content = page();
+	auto * v = new QVBoxLayout(content);
+	v->setContentsMargins(0, 0, 8, 0);
+	v->setSpacing(12);
+	if (!note.isEmpty())
+	{
+		auto * info = new QWidget;
+		auto * ih = new QHBoxLayout(info);
+		ih->setContentsMargins(2, 0, 0, 0);
+		auto * icon = new QLabel;
+		icon->setPixmap(asset("info.png").scaled(18, 18, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+		auto * text = new QLabel(note);
+		text->setObjectName("pageNote");
+		text->setWordWrap(true);
+		ih->addWidget(icon);
+		ih->addWidget(text, 1);
+		v->addWidget(info);
+	}
+	outer->addWidget(scrollArea(content), 1);
+	if (reset)
+		outer->addWidget(resetButton(reset), 0, Qt::AlignRight);
+	return {w, v};
+}
+
+// A titled group of settings
+QVBoxLayout * card(SettingsPage & p, const QString & title)
+{
+	auto * frame = new QFrame;
+	frame->setObjectName("card");
+	auto * v = new QVBoxLayout(frame);
+	v->setContentsMargins(16, 12, 16, 8);
+	v->setSpacing(0);
+	auto * t = new QLabel(title.toUpper());
+	t->setObjectName("cardTitle");
+	t->setContentsMargins(0, 0, 0, 4);
+	v->addWidget(t);
+	p.cards->addWidget(frame);
+	return v;
+}
+
+// One setting: name and a short description on the left, its control on the right. The long explanation is the
+// row's tooltip.
+QWidget * row(QVBoxLayout * card, const QString & title, const QString & description, QWidget * control,
+              const QString & tooltip = {})
+{
+	auto * r = new QWidget;
+	r->setObjectName("settingRow");
+	r->setAttribute(Qt::WA_StyledBackground);
+	auto * g = new QGridLayout(r);
+	g->setContentsMargins(0, 8, 0, 8);
+	g->setHorizontalSpacing(16);
+	g->setVerticalSpacing(1);
+	auto * t = new QLabel(title);
+	t->setObjectName("settingTitle");
+	g->addWidget(t, 0, 0);
+	if (!description.isEmpty())
+	{
+		auto * d = new QLabel(description);
+		d->setObjectName("settingDescription");
+		d->setWordWrap(true);
+		g->addWidget(d, 1, 0);
+	}
+	if (control)
+		g->addWidget(control, 0, 1, description.isEmpty() ? 1 : 2, 1, Qt::AlignRight | Qt::AlignVCenter);
+	g->setColumnStretch(0, 1);
+	if (!tooltip.isEmpty())
+		for (QWidget * w: r->findChildren<QWidget *>(Qt::FindDirectChildrenOnly))
+			w->setToolTip(tooltip);
+	if (card->count() > 1) // a hairline between rows
+	{
+		auto * line = new QFrame;
+		line->setObjectName("rowSeparator");
+		line->setFixedHeight(1);
+		card->addWidget(line);
+	}
+	card->addWidget(r);
+	return r;
+}
+
+// A switch (styled check box) bound to a setting
+QCheckBox * toggle(bool & field, std::function<void()> after = {})
+{
+	auto * c = check({}, field, {}, true, std::move(after));
+	c->setObjectName("switch");
+	c->setCursor(Qt::PointingHandCursor);
+	return c;
+}
+
+QWidget * toggleRow(QVBoxLayout * card, const QString & title, const QString & description, bool & field,
+                    std::function<void()> after = {}, const QString & tooltip = {})
+{
+	return row(card, title, description, toggle(field, std::move(after)), tooltip);
 }
 } // namespace
 
@@ -325,9 +433,9 @@ void AccountsPage::rebuild()
 	list_->addStretch();
 }
 
-// ---------------------------------------------------------------------------------------------- BINDINGS
+// ---------------------------------------------------------------------------------------------- SHORTCUTS
 
-QWidget * makeBindingsPage()
+QWidget * makeShortcutsPage()
 {
 	static const QMap<QString, QString> names{
 	        {"SwitchMonitor", "Switch monitor"},
@@ -340,25 +448,16 @@ QWidget * makeBindingsPage()
 	        {"TogglePerformanceOverlay", "Toggle performance overlay"},
 	        {"ToggleFoveatedStreaming", "Toggle foveated streaming"},
 	};
-	auto * w = page();
-	auto * v = new QVBoxLayout(w);
-	v->setContentsMargins(24, 8, 8, 8);
-	v->addWidget(section("Keyboard shortcuts"));
-	auto * grid_host = page();
-	auto * grid = new QGridLayout(grid_host);
-	grid->setContentsMargins(4, 0, 8, 0);
-	int row = 0;
+	auto p = settingsPage([] { StreamerSettings::instance().resetBindings(); },
+	                      "Keyboard shortcuts that act on the headset while it is connected. Click a field and press the keys.");
+	auto * c = card(p, "Keyboard shortcuts");
 	for (const QString & action: bindingActions)
 	{
-		auto * label = new QLabel(names.value(action, action));
-		label->setObjectName("aboutValue");
 		auto * edit = new QKeySequenceEdit(QKeySequence(StreamerSettings::instance().bindings.value(action)));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 		edit->setMaximumSequenceLength(1);
 #endif
 		edit->setFixedWidth(200);
-		edit->setToolTip(QString("Global shortcut for \"%1\" (registered with the desktop; KDE: System Settings > Shortcuts)")
-		                         .arg(names.value(action)));
 		QObject::connect(edit, &QKeySequenceEdit::editingFinished, edit, [edit, action] {
 			if (edit->keySequence().count() > 1)
 				edit->setKeySequence(QKeySequence(edit->keySequence()[0]));
@@ -369,18 +468,13 @@ QWidget * makeBindingsPage()
 			QSignalBlocker b(edit);
 			edit->setKeySequence(QKeySequence(StreamerSettings::instance().bindings.value(action)));
 		});
-		grid->addWidget(label, row, 0);
-		grid->addWidget(edit, row++, 1, Qt::AlignLeft);
+		row(c, names.value(action, action), {}, edit, QString("Global shortcut for \"%1\"").arg(names.value(action)));
 	}
-	grid->setColumnStretch(2, 1);
-	grid->setRowStretch(row, 1);
-	v->addWidget(scrollArea(grid_host), 1);
-	auto * reset = resetButton([] { StreamerSettings::instance().resetBindings(); });
-	v->addWidget(reset, 0, Qt::AlignRight);
-	return w;
+	p.cards->addStretch();
+	return p.widget;
 }
 
-// ---------------------------------------------------------------------------------------------- OPTIONS
+// ---------------------------------------------------------------------------------------------- shared
 
 // "Start with login": XDG autostart entry, written/removed only when the user toggles the option
 void setAutostart(bool on)
@@ -437,20 +531,14 @@ void hideUnsupportedCodecs(QComboBox * box, std::vector<std::string> nodes, std:
 	}).detach();
 }
 
-QWidget * makeOptionsPage(Engine & engine)
+// ---------------------------------------------------------------------------------------------- STREAMING
+
+QWidget * makeStreamingPage(Engine & engine)
 {
 	auto & s = StreamerSettings::instance();
-	auto restart = [&engine] { engine.applyOptions(); };
-	auto apply = restart;
+	auto apply = [&engine] { engine.applyOptions(); };
+	auto p = settingsPage([] { StreamerSettings::instance().resetStreaming(); });
 
-	auto * w = page();
-	auto * grid = new QGridLayout(w);
-	grid->setContentsMargins(24, 8, 8, 8);
-	grid->setHorizontalSpacing(0);
-	grid->setColumnMinimumWidth(0, 246);
-
-	auto * left = new QVBoxLayout;
-	left->setSpacing(2);
 	// encoder options depend on the GPU(s) encoding: the desktop's and VR's (the same one except on hybrid laptops)
 	const std::string desktop_node = od::default_render_node(), vr_node = od::vr_render_node();
 	std::vector<std::string> nodes{vr_node};
@@ -462,8 +550,9 @@ QWidget * makeOptionsPage(Engine & engine)
 		nvidia |= od::gpu_vendor(n) == 0x10de;
 		amd |= od::gpu_vendor(n) == 0x1002;
 	}
-	left->addWidget(section("Preferred Codec"));
-	auto * codecs = combo<VideoCodec>(180,
+
+	auto * video = card(p, "Video encoding");
+	auto * codecs = combo<VideoCodec>(170,
 	                                  {{VideoCodec::Automatic, "Automatic"},
 	                                   {VideoCodec::H264, "H.264"},
 	                                   {VideoCodec::H264Plus, "H.264+"},
@@ -471,124 +560,45 @@ QWidget * makeOptionsPage(Engine & engine)
 	                                   {VideoCodec::HEVC10bit, "HEVC 10-bit"},
 	                                   {VideoCodec::AV1, "AV1"},
 	                                   {VideoCodec::AV110bit, "AV1 10-bit"}},
-	                                  s.preferredCodec, restart);
-	left->addWidget(codecs, 0, Qt::AlignLeft);
-	hideUnsupportedCodecs(codecs, nodes, restart);
+	                                  s.preferredCodec, apply);
+	hideUnsupportedCodecs(codecs, nodes, apply);
+	row(video, "Preferred codec", "Only codecs your GPU can encode are listed", codecs,
+	    "H.264+ streams VR as several H.264 slices. 10-bit reduces banding in dark gradients.");
 	if (amd || nvidia) // VAAPI on Intel has neither
 	{
-		left->addWidget(check("Adaptive quantization", s.enableAQ,
-		                      QString("Reduces compression artifacts in dark scenes (recommended)\n") +
-		                              (nvidia ? "NVENC spatial adaptive quantization" : "AMD VBAQ (variance-based adaptive quantization)"),
-		                      true, apply));
-		left->addWidget(check("2-Pass encoding", s.enable2Pass,
-		                      QString("Improves compression quality but uses some GPU horsepower to do so\n"
-		                              "Only use when you have performance headroom to spare\n") +
-		                              (nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis"),
-		                      true, apply));
+		toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes (recommended)", s.enableAQ, apply,
+		          nvidia ? "NVENC spatial adaptive quantization" : "AMD VBAQ (variance-based adaptive quantization)");
+		toggleRow(video, "2-pass encoding", "Better quality per bit, costs some GPU time", s.enable2Pass, apply,
+		          QString("Only use when you have performance headroom to spare\n") +
+		                  (nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis"));
 	}
 	if (nvidia) // AMD/Intel already encode with their fastest preset
-		left->addWidget(check("Adaptive encoder speed", s.adaptiveEncoderSpeed,
-		                      "VR: when encoding can't keep up with the headset's refresh rate, switch NVENC to faster presets\n"
-		                      "(slightly less detail per bit, full frame rate) and back once there is headroom again",
-		                      true, apply));
-	left->addWidget(section("Gamepad Emulation", 8));
-	left->addWidget(combo<GamepadEmulation>(180,
-	                                        {{GamepadEmulation::Automatic, "Automatic"},
-	                                         {GamepadEmulation::Xbox, "Xbox"},
-	                                         {GamepadEmulation::Dualshock, "Dualshock"}},
-	                                        s.gamepadEmulation),
-	                0, Qt::AlignLeft);
-	left->addWidget(section("Audio Streaming", 8));
-	left->addWidget(combo<AudioStreaming>(210,
-	                                      {{AudioStreaming::Disabled, "Computer only"},
-	                                       {AudioStreaming::HeadsetOnly, "VR headset only"},
-	                                       {AudioStreaming::HeadsetAndComputer, "VR headset & computer"}},
-	                                      s.audioStreaming, apply),
-	                0, Qt::AlignLeft);
-	left->addWidget(check("Use virtual audio driver", s.useVirtualAudioDriver,
-	                      "Enable this option if you experience issues streaming audio\n"
-	                      "Linux: 'VR headset only' routes PC audio to a 'OpenDesk Audio' sink while connected;\n"
-	                      "off = the real output is muted instead",
-	                      true, apply));
-	left->addStretch();
+		toggleRow(video, "Adaptive encoder speed", "Keeps the full frame rate in VR when encoding falls behind",
+		          s.adaptiveEncoderSpeed, apply,
+		          "Switches NVENC to faster presets while encoding can't keep up with the headset's refresh rate\n"
+		          "(slightly less detail per bit) and back once there is headroom again");
 
-	auto * right = new QVBoxLayout;
-	right->setSpacing(0);
-	right->addWidget(check("Encrypt local traffic", s.encryptLocalTraffic,
-	                       "Also encrypts video, audio and input on your local network (applies to the next connection)", true,
-	                       apply));
-	right->addWidget(check("Automatically adjust bitrate", s.autoAdjustBitrate,
-	                       "Adjusts the video bitrate based on the available bandwidth (requires re-connection)", true,
-	                       [&engine] { engine.applyOptions(); }));
-	right->addWidget(check("Start with login", s.startWithLogin, "Adds an XDG autostart entry (~/.config/autostart)", true,
-	                       [] { setAutostart(StreamerSettings::instance().startWithLogin); }));
-	right->addWidget(check("Start minimized in tray", s.startMinimizedInTray));
-	right->addWidget(check("Use touch input", s.useTouchInput,
-	                       "Enable to allow touch gestures. Disable if clicks don't work correctly", true,
-	                       [&engine] { engine.applyOptions(); }));
-	right->addWidget(check("Lock computer on disconnect", s.lockComputer, "Locks the session (loginctl lock-session) when the headset disconnects",
-	                       true, apply));
-	right->addWidget(check("Auto-select microphone", s.autoSelectMicrophone,
-	                       "Automatically selects the OpenDesk Microphone when Microphone passthrough is "
-	                       "enabled in VR",
-	                       true, apply));
-	right->addWidget(check("Ask for computer access", s.showPairingRequests,
-	                       "Shows a prompt when a new headset is searching for computers in your local network"));
-	right->addStretch();
+	auto * net = card(p, "Network");
+	toggleRow(net, "Automatically adjust bitrate", "Follows the bandwidth the headset measures", s.autoAdjustBitrate, apply,
+	          "Takes effect on the next connection");
+	toggleRow(net, "Encrypt local traffic", "Also encrypt video, audio and input on your local network", s.encryptLocalTraffic,
+	          apply, "Takes effect on the next connection");
 
-	grid->addLayout(left, 0, 0, 2, 1);
-	grid->addLayout(right, 0, 1);
-	grid->setColumnStretch(1, 1);
-	grid->setRowStretch(0, 1);
-	grid->addWidget(resetButton([] { StreamerSettings::instance().resetOptions(); }), 1, 1,
-	                Qt::AlignRight | Qt::AlignBottom);
-	return w;
-}
-
-// ---------------------------------------------------------------------------------------------- ADVANCED
-
-QWidget * makeAdvancedPage(Engine & engine)
-{
-	auto & s = StreamerSettings::instance();
-	auto * w = page();
-	auto * outer = new QVBoxLayout(w);
-	outer->setContentsMargins(24, 8, 8, 8);
-	// more settings than fit: they scroll, Reset to Defaults stays
-	auto * content = page();
-	auto * v = new QVBoxLayout(content);
-	v->setContentsMargins(0, 0, 8, 0);
-	v->setSpacing(2);
-
-	auto * info = new QWidget;
-	auto * ih = new QHBoxLayout(info);
-	ih->setContentsMargins(4, 0, 0, 0);
-	auto * icon = new QLabel;
-	icon->setPixmap(asset("info.png"));
-	auto * note = new QLabel("These settings apply to VR games using OpenDesk XR.");
-	note->setObjectName("accountIds");
-	ih->addWidget(icon);
-	ih->addWidget(note);
-	ih->addStretch();
-	v->addWidget(info);
-
-	v->addWidget(section("Reported Streamer Version (compatibility)", 10));
+	auto * compat = card(p, "Headset compatibility");
 	auto * reported = new QLineEdit(s.reportedStreamerVersion);
-	v->addWidget(check("Automatic (match the headset app)", s.reportedVersionAuto,
-	                   "Headset apps from 1.34.25 tell the streamer their version: it is reported back, so the headset neither\n"
-	                   "refuses the PC nor asks to update it, and gets every feature it supports. Older headset apps get the\n"
-	                   "version below. Uncheck to always report the version below",
-	                   true, [&engine, reported] {
-		                   reported->setEnabled(!StreamerSettings::instance().reportedVersionAuto);
-		                   engine.applyOptions();
-	                   }));
+	toggleRow(compat, "Match the headset app's version", "Reports the version the headset app expects (recommended)",
+	          s.reportedVersionAuto,
+	          [&engine, reported] {
+		          reported->setEnabled(!StreamerSettings::instance().reportedVersionAuto);
+		          engine.applyOptions();
+	          },
+	          "Headset apps from 1.34.25 tell the streamer their version: it is reported back, so the headset neither\n"
+	          "refuses the PC nor asks to update it, and gets every feature it supports. Older headset apps get the\n"
+	          "version below. Off: always report the version below");
 	reported->setEnabled(!s.reportedVersionAuto);
-	reported->setMaximumWidth(160);
+	reported->setFixedWidth(120);
 	reported->setPlaceholderText("1.20.3");
-	reported->setToolTip("The version this streamer advertises to the headset app (with Automatic: to apps older than 1.34.25).\n"
-	                     "The headset refuses a streamer with a higher minor version, so 1.20.3 connects to every\n"
-	                     "headset app from 1.20.3 onward. 1.34.23 unlocks eye-tracked foveated streaming and stream\n"
-	                     "restart on current headsets. Takes effect on the next connection.");
-	QObject::connect(reported, &QLineEdit::editingFinished, [&engine, reported] {
+	QObject::connect(reported, &QLineEdit::editingFinished, reported, [&engine, reported] {
 		const QString text = reported->text().trimmed();
 		if (!QRegularExpression("^[0-9]+(\\.[0-9]+){0,3}$").match(text).hasMatch())
 		{
@@ -599,47 +609,61 @@ QWidget * makeAdvancedPage(Engine & engine)
 		StreamerSettings::instance().save();
 		engine.applyOptions();
 	});
-	v->addWidget(reported);
+	QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, reported, [reported] {
+		auto & st = StreamerSettings::instance();
+		reported->setText(st.reportedStreamerVersion);
+		reported->setEnabled(!st.reportedVersionAuto);
+	});
+	row(compat, "Reported version", "For older headset apps, or all of them when matching is off", reported,
+	    "The headset refuses a streamer with a higher minor version, so 1.20.3 connects to every headset app from\n"
+	    "1.20.3 onward. 1.34.23 unlocks eye-tracked foveated streaming and stream restart on current headsets.\n"
+	    "Takes effect on the next connection.");
+	p.cards->addStretch();
+	return p.widget;
+}
 
-	v->addWidget(section("Horizontal FOV Tangent", 4));
-	v->addWidget(slider(s.horizontalFovTangent, 0.5, 1.0, 0.01, "%.2f"));
-	v->addWidget(section("Vertical FOV Tangent", 10));
-	v->addWidget(slider(s.verticalFovTangent, 0.5, 1.0, 0.01, "%.2f"));
-	v->addWidget(section("OpenDesk XR Render Resolution", 10));
-	v->addWidget(slider(s.renderResolutionOverride, 0.5, 2.0, 0.05, "%.2fx"));
-	auto * fovea = section("Fovea Size", 10);
-	fovea->setToolTip("Foveated streaming (eye-tracked headsets): the region around your gaze sent at full resolution, as a\n"
-	                  "fraction of the eye image. Bigger = sharper area, more to encode and decode.\n"
-	                  "Windows upstream: 15-35%, default 25%; up to 50% here (more for the headset to decode)");
-	v->addWidget(fovea);
-	v->addWidget(slider(s.foveaSize, 0.15, 0.5, 0.01, "%.0f%%", 100)); // Windows: 15-35%, default 25%; above that more to decode
-	auto * periphery = section("Periphery Resolution", 10);
-	periphery->setToolTip("Foveated streaming (eye-tracked headsets): resolution outside the fovea, as a fraction of the eye\n"
-	                      "resolution (Windows: always 33% - its encode size halved). Lower = less to encode and decode - helps headsets with weaker\n"
-	                      "decoders (Quest Pro) at high quality / refresh rates; the fovea stays sharp");
-	v->addWidget(periphery);
-	v->addWidget(slider(s.peripheryScale, 0.3, 0.5, 0.01, "%.0f%%", 100));
-	v->addWidget(check("Soft fovea edge", s.softFoveaEdge,
-	                   "Foveated streaming: the sharp area loses detail gradually toward its edge and ends in the\n"
-	                   "periphery's own pixels. Off: a hard edge, like the Windows streamer. Takes effect right away",
-	                   true, [&engine] { engine.applyOptions(); }));
-	v->addWidget(check("Additional sharpening", s.useSharpening,
-	                   "Adds contrast-adaptive sharpening before video encoding.\n"
-	                   "Doesn't require a restart of the game to take effect",
-	                   true, [&engine] { engine.applyOptions(); }));
-	v->addWidget(slider(s.sharpening, 0.0, 1.0, 0.05, "%.2f"));
-	v->addWidget(check("Use Fov Stencil", s.useFovStencil,
-	                   "Optimizes game rendering by not rendering the corners. Only uncheck when recording gameplay "
-	                   "(requires restart of the game)",
-	                   true, [&engine] { engine.applyOptions(); }));
+// ---------------------------------------------------------------------------------------------- VR
+
+QWidget * makeVRPage(Engine & engine)
+{
+	auto & s = StreamerSettings::instance();
+	auto apply = [&engine] { engine.applyOptions(); };
+	auto p = settingsPage([] { StreamerSettings::instance().resetVR(); }, "These settings apply to VR games running on OpenDesk XR.");
+
+	auto * image = card(p, "Image");
+	row(image, "Render resolution", "Resolution games render at, relative to the headset's",
+	    slider(s.renderResolutionOverride, 0.5, 2.0, 0.05, "%.2fx"));
+	row(image, "Horizontal FOV", "Narrower renders and streams less", slider(s.horizontalFovTangent, 0.5, 1.0, 0.01, "%.2f"),
+	    "Tangent of the horizontal field of view, relative to the headset's");
+	row(image, "Vertical FOV", "Narrower renders and streams less", slider(s.verticalFovTangent, 0.5, 1.0, 0.01, "%.2f"),
+	    "Tangent of the vertical field of view, relative to the headset's");
+	toggleRow(image, "FOV stencil", "Games skip the corners the lenses can't show", s.useFovStencil, apply,
+	          "Saves GPU time with no visible difference in the headset. Turn off when recording gameplay\n"
+	          "(requires restarting the game)");
+	toggleRow(image, "Additional sharpening", "Contrast-adaptive sharpening before encoding", s.useSharpening, apply,
+	          "Takes effect right away");
+	auto * strength = row(image, "Sharpening strength", {}, slider(s.sharpening, 0.0, 1.0, 0.05, "%.2f"));
+	strength->setEnabled(s.useSharpening); // only matters with sharpening on
+	QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, strength,
+	                 [strength] { strength->setEnabled(StreamerSettings::instance().useSharpening); });
+
+	auto * fov = card(p, "Foveated streaming (eye-tracked headsets)");
+	row(fov, "Fovea size", "The area around your gaze sent at full resolution", slider(s.foveaSize, 0.15, 0.5, 0.01, "%.0f%%", 100),
+	    "Fraction of the eye image. Bigger = sharper area, more to encode and decode.\n"
+	    "15-35% is the usual range (25% default); up to 50% means more for the headset to decode");
+	row(fov, "Periphery resolution", "Resolution outside the fovea", slider(s.peripheryScale, 0.3, 0.5, 0.01, "%.0f%%", 100),
+	    "Fraction of the eye resolution. Lower = less to encode and decode - helps headsets with weaker\n"
+	    "decoders (Quest Pro) at high quality / refresh rates; the fovea stays sharp");
+	toggleRow(fov, "Soft fovea edge", "Blend the sharp area into the periphery gradually", s.softFoveaEdge, apply,
+	          "Off: a hard edge between the sharp area and the periphery. Takes effect right away");
+
+	auto * perf = card(p, "Performance");
 #ifdef _WIN32
-	v->addWidget(check("Boost game priority", s.boostGamePriority,
-	                   "Only enable if experiencing game freezes or stutter. Raises the priority of the game's render thread\n"
-	                   "(highest thread priority, process above normal). Takes effect right away",
-	                   true, [&engine] { engine.applyOptions(); }));
+	toggleRow(perf, "Boost game priority", "Only if games freeze or stutter", s.boostGamePriority, apply,
+	          "Raises the priority of the game's render thread (highest thread priority, process above normal).\n"
+	          "Takes effect right away");
 
-	// DXVK per game: Direct3D 11 games rendered through Vulkan (what Proton does on Linux)
-	v->addWidget(section("DXVK (Direct3D 11 games on Vulkan)", 10));
+	// DXVK per game: Direct3D 11 games rendered through Vulkan
 	auto * dxvk_games = new QListWidget;
 	dxvk_games->setMinimumHeight(140);
 	dxvk_games->setToolTip("Checked games run with DXVK: OpenDesk places DXVK's d3d11.dll and dxgi.dll next to the game and removes\n"
@@ -661,7 +685,7 @@ QWidget * makeAdvancedPage(Engine & engine)
 		if (games.empty())
 			new QListWidgetItem("No VR games found", dxvk_games);
 	};
-	QObject::connect(dxvk_games, &QListWidget::itemChanged, [&engine](QListWidgetItem * item) {
+	QObject::connect(dxvk_games, &QListWidget::itemChanged, dxvk_games, [&engine](QListWidgetItem * item) {
 		const QString key = item->data(Qt::UserRole).toString();
 		if (key.isEmpty())
 			return;
@@ -670,22 +694,22 @@ QWidget * makeAdvancedPage(Engine & engine)
 		st.save();
 		engine.applyOptions();
 	});
-	v->addWidget(check("Use DXVK for VR games by default", s.dxvkByDefault,
-	                   "Games you haven't set below follow this (off: Direct3D 11 as usual)", true, [&engine, dxvk_games] {
-		                   auto & st = StreamerSettings::instance();
-		                   for (int i = 0; i < dxvk_games->count(); ++i) // games without their own setting follow
-		                   {
-			                   auto * item = dxvk_games->item(i);
-			                   const QString key = item->data(Qt::UserRole).toString();
-			                   if (!key.isEmpty() && !st.dxvkGames.contains(key))
-			                   {
-				                   QSignalBlocker block(dxvk_games);
-				                   item->setCheckState(st.dxvkByDefault ? Qt::Checked : Qt::Unchecked);
-			                   }
-		                   }
-		                   engine.applyOptions();
-	                   }));
-	v->addWidget(dxvk_games);
+	toggleRow(perf, "DXVK by default", "Direct3D 11 games render through Vulkan unless set below", s.dxvkByDefault,
+	          [&engine, dxvk_games] {
+		          auto & st = StreamerSettings::instance();
+		          for (int i = 0; i < dxvk_games->count(); ++i) // games without their own setting follow
+		          {
+			          auto * item = dxvk_games->item(i);
+			          const QString key = item->data(Qt::UserRole).toString();
+			          if (!key.isEmpty() && !st.dxvkGames.contains(key))
+			          {
+				          QSignalBlocker block(dxvk_games);
+				          item->setCheckState(st.dxvkByDefault ? Qt::Checked : Qt::Unchecked);
+			          }
+		          }
+		          engine.applyOptions();
+	          });
+	perf->addWidget(dxvk_games);
 	{
 		QPointer<QListWidget> list(dxvk_games);
 		std::thread([list, fill_dxvk] {
@@ -697,23 +721,77 @@ QWidget * makeAdvancedPage(Engine & engine)
 		}).detach();
 	}
 #else
-	v->addWidget(check("Boost game priority", s.boostGamePriority,
-	                   "Only enable if experiencing game freezes or stutter. Raises the priority of the game's render thread\n"
-	                   "(Linux: CPU priority through rtkit; Windows raises the GPU priority, which needs root here).\n"
-	                   "Takes effect right away",
-	                   true, [&engine] { engine.applyOptions(); }));
+	toggleRow(perf, "Boost game priority", "Only if games freeze or stutter", s.boostGamePriority, apply,
+	          "Raises the CPU priority of the game's render thread (through rtkit). Takes effect right away");
 #endif
-	auto * mouth = section("Mouth Sensitivity", 10);
-	mouth->setToolTip("Face tracking to VRChat (Quest Pro): how strongly the avatar's mouth and jaw follow yours. 1.0x = the\n"
-	                  "headset's values as they are; higher makes normal talking visible without opening wide (closed\n"
-	                  "stays closed, fully open stays fully open). Takes effect right away");
-	v->addWidget(mouth);
-	v->addWidget(slider(s.mouthSensitivity, 1.0, 4.0, 0.1, "%.1fx"));
 
-	v->addStretch();
-	outer->addWidget(scrollArea(content), 1);
-	outer->addWidget(resetButton([] { StreamerSettings::instance().resetAdvanced(); }), 0, Qt::AlignRight);
-	return w;
+	auto * face = card(p, "Face tracking");
+	row(face, "Mouth sensitivity", "How strongly the avatar's mouth follows yours (VRChat)",
+	    slider(s.mouthSensitivity, 1.0, 4.0, 0.1, "%.1fx"),
+	    "Face tracking to VRChat (Quest Pro): 1.0x = the headset's values as they are; higher makes normal\n"
+	    "talking visible without opening wide (closed stays closed, fully open stays fully open). Takes effect right away");
+	p.cards->addStretch();
+	return p.widget;
+}
+
+// ---------------------------------------------------------------------------------------------- AUDIO & INPUT
+
+QWidget * makeAudioInputPage(Engine & engine)
+{
+	auto & s = StreamerSettings::instance();
+	auto apply = [&engine] { engine.applyOptions(); };
+	auto p = settingsPage([] { StreamerSettings::instance().resetAudioInput(); });
+
+	auto * audio = card(p, "Audio");
+	row(audio, "Audio streaming", "Where the PC's sound plays while connected",
+	    combo<AudioStreaming>(200,
+	                          {{AudioStreaming::Disabled, "Computer only"},
+	                           {AudioStreaming::HeadsetOnly, "VR headset only"},
+	                           {AudioStreaming::HeadsetAndComputer, "VR headset & computer"}},
+	                          s.audioStreaming, apply));
+#ifndef _WIN32 // Windows: 'VR headset only' always mutes the PC's output (no virtual device without a driver)
+	toggleRow(audio, "Use virtual audio device", "With 'VR headset only', PC sound goes to an 'OpenDesk Audio' device",
+	          s.useVirtualAudioDriver, apply,
+	          "Enable this option if you experience issues streaming audio. Off: the real output is muted instead");
+#endif
+	toggleRow(audio, "Select the headset microphone", "Makes it the default input while microphone passthrough is on",
+	          s.autoSelectMicrophone, apply);
+
+	auto * input = card(p, "Input");
+	row(input, "Gamepad emulation", "The controller type games see",
+	    combo<GamepadEmulation>(200,
+	                            {{GamepadEmulation::Automatic, "Automatic"},
+	                             {GamepadEmulation::Xbox, "Xbox"},
+	                             {GamepadEmulation::Dualshock, "Dualshock"}},
+	                            s.gamepadEmulation));
+	toggleRow(input, "Touch input", "Allows touch gestures on the desktop", s.useTouchInput, apply,
+	          "Disable if clicks don't work correctly");
+	p.cards->addStretch();
+	return p.widget;
+}
+
+// ---------------------------------------------------------------------------------------------- GENERAL
+
+QWidget * makeGeneralPage(Engine & engine)
+{
+	auto & s = StreamerSettings::instance();
+	auto apply = [&engine] { engine.applyOptions(); };
+	auto p = settingsPage([] { StreamerSettings::instance().resetGeneral(); });
+
+	auto * startup = card(p, "Startup");
+#ifdef _WIN32
+	toggleRow(startup, "Start with login", "Run the streamer when you sign in", s.startWithLogin);
+#else
+	toggleRow(startup, "Start with login", "Run the streamer when you sign in", s.startWithLogin,
+	          [] { setAutostart(StreamerSettings::instance().startWithLogin); }, "Adds an XDG autostart entry (~/.config/autostart)");
+#endif
+	toggleRow(startup, "Start minimized", "Start in the tray instead of opening this window", s.startMinimizedInTray);
+
+	auto * security = card(p, "Security");
+	toggleRow(security, "Ask for computer access", "Prompt when a new headset searches for computers", s.showPairingRequests);
+	toggleRow(security, "Lock computer on disconnect", "Lock the session when the headset disconnects", s.lockComputer, apply);
+	p.cards->addStretch();
+	return p.widget;
 }
 
 // ---------------------------------------------------------------------------------------------- ABOUT

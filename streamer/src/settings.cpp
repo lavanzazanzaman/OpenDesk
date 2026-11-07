@@ -91,27 +91,21 @@ QStringList StreamerSettings::allAccountIDs() const
 	return all;
 }
 
-void StreamerSettings::resetOptions()
+// Reset to Defaults, per tab
+void StreamerSettings::resetStreaming()
 {
 	preferredCodec = VideoCodec::Automatic;
 	enableAQ = true;
 	enable2Pass = false;
 	adaptiveEncoderSpeed = true;
-	gamepadEmulation = GamepadEmulation::Automatic;
-	audioStreaming = AudioStreaming::HeadsetOnly;
-	useVirtualAudioDriver = true;
 	encryptLocalTraffic = false;
 	autoAdjustBitrate = true;
-	startWithLogin = false;
-	startMinimizedInTray = false;
-	useTouchInput = true;
-	lockComputer = false;
-	autoSelectMicrophone = true;
-	showPairingRequests = true;
+	reportedStreamerVersion = "1.20.3";
+	reportedVersionAuto = true;
 	save();
 }
 
-void StreamerSettings::resetAdvanced()
+void StreamerSettings::resetVR()
 {
 	horizontalFovTangent = 1.0;
 	verticalFovTangent = 1.0;
@@ -126,8 +120,25 @@ void StreamerSettings::resetAdvanced()
 	dxvkByDefault = false;
 	dxvkGames.clear();
 	mouthSensitivity = 2.0;
-	reportedStreamerVersion = "1.20.3";
-	reportedVersionAuto = true;
+	save();
+}
+
+void StreamerSettings::resetAudioInput()
+{
+	audioStreaming = AudioStreaming::HeadsetOnly;
+	useVirtualAudioDriver = true;
+	autoSelectMicrophone = true;
+	gamepadEmulation = GamepadEmulation::Automatic;
+	useTouchInput = true;
+	save();
+}
+
+void StreamerSettings::resetGeneral()
+{
+	startWithLogin = false;
+	startMinimizedInTray = false;
+	lockComputer = false;
+	showPairingRequests = true;
 	save();
 }
 

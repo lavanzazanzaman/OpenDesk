@@ -33,8 +33,8 @@ QPushButton * imageButton(const QString & asset, const QString & tooltip)
 	auto * b = new QPushButton;
 	b->setObjectName("imageButton");
 	b->setIcon(QIcon(":/assets/opendesk/" + asset));
-	b->setIconSize({32, 32});
-	b->setFixedSize(32, 32);
+	b->setIconSize({16, 16});
+	b->setFixedSize(36, 30);
 	b->setToolTip(tooltip);
 	b->setCursor(Qt::ArrowCursor);
 	return b;
@@ -48,8 +48,8 @@ MainWindow::MainWindow(Engine & engine) :
 	setWindowIcon(QIcon(":/assets/opendesk/app.ico"));
 	setWindowFlag(Qt::FramelessWindowHint);
 	setAttribute(Qt::WA_TranslucentBackground); // rounded corners
-	setMinimumSize(700, 516);
-	resize(700, 516);
+	setMinimumSize(760, 560);
+	resize(820, 620);
 	setMouseTracking(true);
 
 	auto * root = new QVBoxLayout(this);
@@ -76,9 +76,11 @@ MainWindow::MainWindow(Engine & engine) :
 	accounts_ = new AccountsPage(engine_);
 	const QList<std::pair<QString, QWidget *>> pages{
 	        {"ACCOUNTS", accounts_},
-	        {"BINDINGS", makeBindingsPage()},
-	        {"OPTIONS", makeOptionsPage(engine_)},
-	        {"ADVANCED", makeAdvancedPage(engine_)},
+	        {"STREAMING", makeStreamingPage(engine_)},
+	        {"VR", makeVRPage(engine_)},
+	        {"AUDIO && INPUT", makeAudioInputPage(engine_)},
+	        {"SHORTCUTS", makeShortcutsPage()},
+	        {"GENERAL", makeGeneralPage(engine_)},
 	        {"ABOUT", new AboutPage(engine_)},
 	};
 	for (int i = 0; i < pages.size(); ++i)
@@ -220,7 +222,7 @@ QWidget * MainWindow::makeFooter()
 		h->addWidget(key);
 		h->addWidget(value);
 	};
-	pair("Linux Streamer:", OPENDESK_VERSION, "Version of this Linux streamer");
+	pair("Streamer:", OPENDESK_VERSION, "Version of this streamer");
 	h->addStretch();
 	pair("Streamer Support Version:", OPENDESK_UPSTREAM_VERSION,
 	     "The OpenDesk streamer version this speaks the protocol of; the headset app must be exactly this version");

@@ -1,4 +1,4 @@
-// The six tabs of the Streamer window (layouts follow MainWindow.xaml of Upstream.Streamer).
+// The tabs of the Streamer window: accounts, settings by category, about.
 #pragma once
 
 #include <QWidget>
@@ -7,9 +7,11 @@ class Engine;
 class QLabel;
 class QVBoxLayout;
 
-QWidget * makeBindingsPage();
-QWidget * makeOptionsPage(Engine &);
-QWidget * makeAdvancedPage(Engine &);
+QWidget * makeShortcutsPage();
+QWidget * makeStreamingPage(Engine &);
+QWidget * makeVRPage(Engine &);
+QWidget * makeAudioInputPage(Engine &);
+QWidget * makeGeneralPage(Engine &);
 
 class AccountsPage : public QWidget
 {

@@ -119,8 +119,10 @@ public:
 
 	void load();
 	void save();
-	void resetOptions();
-	void resetAdvanced();
+	void resetStreaming();
+	void resetVR();
+	void resetAudioInput();
+	void resetGeneral();
 	void resetBindings();
 
 signals:

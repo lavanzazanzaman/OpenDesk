@@ -12,7 +12,7 @@ qt_add_executable(opendesk-streamer
     src/shortcuts.cpp src/shortcuts.h
 )
 
-qt_add_resources(opendesk-streamer "theme" PREFIX "/" FILES theme/violet.qss theme/check.svg theme/arrow.svg)
+qt_add_resources(opendesk-streamer "theme" PREFIX "/" FILES theme/violet.qss theme/check.svg theme/arrow.svg theme/switch-on.svg theme/switch-off.svg theme/switch-off-disabled.svg)
 
 # Project-owned UI artwork (no third-party logos are redistributed).
 file(GLOB OPENDESK_ASSETS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS assets/opendesk/*)

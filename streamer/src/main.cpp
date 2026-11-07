@@ -208,6 +208,12 @@ int main(int argc, char ** argv)
 		return 1;
 	}
 
+	// one look everywhere: the stylesheet is written against Fusion (platform styles - Windows 11's especially -
+	// ignore parts of it, e.g. check boxes); no slide/fade animations on drop-downs, menus and tooltips (they made
+	// the drop-downs feel laggy)
+	QApplication::setStyle("Fusion");
+	for (Qt::UIEffect e: {Qt::UI_AnimateCombo, Qt::UI_AnimateMenu, Qt::UI_FadeMenu, Qt::UI_AnimateTooltip, Qt::UI_FadeTooltip})
+		QApplication::setEffectEnabled(e, false);
 	QFile qss(":/theme/violet.qss");
 	if (qss.open(QIODevice::ReadOnly))
 		app.setStyleSheet(QString::fromUtf8(qss.readAll()));

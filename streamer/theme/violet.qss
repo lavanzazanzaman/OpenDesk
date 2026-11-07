@@ -13,9 +13,9 @@ QWidget { color: #C9C4D8; font-size: 15px; }
 #linuxSuffix { color: #B9A8FF; font-size: 17px; }
 
 QPushButton#tabButton {
-    background: #15131C; color: #8A8699; font-size: 15px; font-weight: bold; letter-spacing: 1px;
+    background: #15131C; color: #8A8699; font-size: 13px; font-weight: bold; letter-spacing: 1px;
     text-align: left; padding: 0 16px 0 13px; border: none; border-left: 3px solid transparent;
-    border-radius: 0; min-height: 48px; max-height: 48px; min-width: 128px; max-width: 128px;
+    border-radius: 0; min-height: 46px; max-height: 46px; min-width: 150px; max-width: 150px;
 }
 QPushButton#tabButton:hover { color: #FFFFFF; background: #1B1924; }
 QPushButton#tabButton:checked { color: #FFFFFF; background: #1E1B2B; border-left: 3px solid #8B6CFF; }
@@ -72,7 +72,7 @@ QSlider::handle:horizontal:hover { background: #FFFFFF; }
 QSlider::handle:horizontal:pressed { background: #B9A8FF; }
 
 QLineEdit, QKeySequenceEdit {
-    background: #0B0A10; border: 1px solid #332E45; border-radius: 5px; padding: 3px 8px;
+    font-size: 13px; background: #0B0A10; border: 1px solid #332E45; border-radius: 5px; padding: 3px 8px;
     selection-background-color: rgba(139, 108, 255, 110); selection-color: #FFFFFF;
 }
 QLineEdit:hover, QKeySequenceEdit:hover { border-color: #5C4BA8; }
@@ -91,3 +91,22 @@ QMenu::item:selected { background: #2A2540; color: #FFFFFF; }
 QMenu::icon { padding-left: 8px; }
 
 QDialog#vdDialog { background: #1B1924; border: 1px solid #3A3450; }
+
+/* settings pages: cards of rows */
+QFrame#card { background: #17151F; border: 1px solid #23202F; border-radius: 10px; }
+QLabel#cardTitle { color: #B9A8FF; font-size: 12px; font-weight: bold; letter-spacing: 1px; }
+QWidget#settingRow { background: transparent; }
+QLabel#settingTitle { color: #FFFFFF; font-size: 14px; }
+QLabel#settingDescription { color: #8A8699; font-size: 12px; }
+QFrame#rowSeparator { background: #23202F; border: none; }
+QLabel#pageNote { color: #8A8699; font-size: 13px; }
+
+/* switches: check boxes without text in settings rows */
+QCheckBox#switch { spacing: 0; min-height: 22px; }
+QCheckBox#switch::indicator { width: 36px; height: 20px; border: none; background: transparent; image: url(:/theme/switch-off.svg); }
+QCheckBox#switch::indicator:checked { image: url(:/theme/switch-on.svg); background: transparent; }
+QCheckBox#switch::indicator:disabled { image: url(:/theme/switch-off-disabled.svg); }
+QCheckBox#switch::indicator:hover { border: none; }
+QLabel#settingTitle:disabled, QLabel#settingDescription:disabled { color: #5E5A6B; }
+QSlider::sub-page:horizontal:disabled { background: #3A3450; }
+QSlider::handle:horizontal:disabled { background: #5E5A6B; }
