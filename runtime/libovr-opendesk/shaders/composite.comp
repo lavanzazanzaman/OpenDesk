@@ -142,8 +142,9 @@ void main()
 			vec2 t = (vec2(p) + 0.5) / vec2(size);
 			vec2 s = pc.info.w != 0 ? (pc.effects.zw + vec2(p) + 0.5) / eye : vec2(unwarp(t.x), unwarp(t.y));
 			vec2 tan_xy = vec2(mix(-pc.fov_out.x, pc.fov_out.y, s.x), mix(pc.fov_out.z, -pc.fov_out.w, s.y));
-			// the ellipse is the one inside the game's FOV (a: left, right, up, down - cropped by the FOV settings)
-			vec2 semi = vec2(atan(tan_xy.x >= 0.0 ? pc.a.y : pc.a.x), atan(tan_xy.y >= 0.0 ? pc.a.z : pc.a.w)) * pc.effects.y;
+			// the lens ellipse in the headset's FOV (the stream's), whatever the game's FOV is cropped to
+			vec2 semi = vec2(atan(tan_xy.x >= 0.0 ? pc.fov_out.y : pc.fov_out.x), atan(tan_xy.y >= 0.0 ? pc.fov_out.z : pc.fov_out.w)) *
+			            pc.effects.y;
 			vec2 q = atan(tan_xy) / semi;
 			if (dot(q, q) > 1.0)
 			{

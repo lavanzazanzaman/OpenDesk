@@ -497,20 +497,25 @@ OVR_PUBLIC_FUNCTION(ovrEyeRenderDesc) ovr_GetRenderDesc(ovrSession session, ovrE
 }
 
 // "Use Fov Stencil": what the lenses show of the rectangular eye image is round - an ellipse in viewing angle inscribed
-// in the eye's (asymmetric) FOV, 5% larger so nothing visible is cut. Games skip rendering the corners outside it
-// (OpenDesk XR: XR_KHR_visibility_mask). Coordinates in [0,1], y down (ovrFovStencilFlag_MeshOriginAtBottomLeft: y up).
+// in the headset's full (asymmetric) FOV, grown by fov_stencil_margin so only what the lenses can't show is cut (about
+// 9% of the image, like stencils made for these headsets). Games skip rendering outside it (OpenDesk XR:
+// XR_KHR_visibility_mask). The ellipse belongs to the headset, not the game's FOV: with the FOV settings cropping the
+// image its corners are visible, so less (or nothing) is hidden. Coordinates in [0,1], y down
+// (ovrFovStencilFlag_MeshOriginAtBottomLeft: y up).
 OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFovStencilDesc * desc, ovrFovStencilMeshBuffer * mesh)
 {
 	if (!desc || !mesh)
 		return ovrError_InvalidParameter;
 	auto * s = S(session);
 	bool use = true;
+	ovrFovPort lens{1, 1, 1, 1};
 	{
 		std::lock_guard lock(s->mutex);
 		s->refresh();
 		use = s->state.settings.use_stencil != 0;
+		s->eye_fov(desc->Eye == ovrEye_Right ? 1 : 0, lens, false); // the headset's whole FOV
 	}
-	const ovrFovPort & f = desc->FovPort;
+	const ovrFovPort & f = desc->FovPort; // the image the mesh is for
 	const float L = f.LeftTan, R = f.RightTan, U = f.UpTan, D = f.DownTan;
 	std::vector<ovrVector2f> v;
 	std::vector<uint16_t> idx;
@@ -520,21 +525,32 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 		return ovrVector2f{(tx + L) / (L + R), flip ? 1.f - y : y};
 	};
 	constexpr float margin = od::ovr::fov_stencil_margin;
-	constexpr int n = 64;                // ring points
+	constexpr int n = 64; // rays
 	constexpr float pi = 3.14159265358979f;
-	auto ellipse = [&](float phi) { // viewing angles per side, then back to tangents
-		float c = std::cos(phi), sn = std::sin(phi);
-		float ax = (c >= 0 ? std::atan(R) : std::atan(L)) * margin * c, ay = (sn >= 0 ? std::atan(U) : std::atan(D)) * margin * sn;
-		float tx = std::clamp(std::tan(std::clamp(ax, -1.5f, 1.5f)), -L, R), ty = std::clamp(std::tan(std::clamp(ay, -1.5f, 1.5f)), -D, U);
-		return std::pair{tx, ty};
+	auto visible = [&](float tx, float ty) { // inside the lens ellipse (viewing angles, per side)
+		const float ax = std::atan(tx) / (std::atan(tx >= 0 ? lens.RightTan : lens.LeftTan) * margin);
+		const float ay = std::atan(ty) / (std::atan(ty >= 0 ? lens.UpTan : lens.DownTan) * margin);
+		return ax * ax + ay * ay <= 1.f;
 	};
-	auto rect = [&](float phi) { // where the ray at angle phi (in tangent space) leaves the image
+	auto rect = [&](float phi) { // where the ray at angle phi (tangent space) leaves the image
 		float c = std::cos(phi), sn = std::sin(phi);
 		float kx = c > 1e-6f ? R / c : c < -1e-6f ? -L / c : 1e9f, ky = sn > 1e-6f ? U / sn : sn < -1e-6f ? -D / sn : 1e9f;
 		float k = std::min(kx, ky);
 		return std::pair{c * k, sn * k};
 	};
-	// ring angles: evenly spaced plus the exact image corners, so the outer ring follows the rectangle
+	auto edge = [&](float phi) { // where the ray leaves what is visible: the ellipse, or the image if that comes first
+		auto [ox, oy] = rect(phi);
+		if (visible(ox, oy))
+			return std::pair{ox, oy};
+		float lo = 0, hi = 1; // fraction of the way to the image border
+		for (int i = 0; i < 24; ++i)
+		{
+			const float mid = (lo + hi) / 2;
+			(visible(ox * mid, oy * mid) ? lo : hi) = mid;
+		}
+		return std::pair{ox * lo, oy * lo};
+	};
+	// ray angles: evenly spaced plus the exact image corners, so the outer ring follows the rectangle
 	std::vector<float> phis;
 	for (int i = 0; i < n; ++i)
 		phis.push_back(2 * pi * float(i) / n);
@@ -546,9 +562,9 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 		; // nothing hidden: empty masks (games render the whole image)
 	else if (desc->StencilType == ovrFovStencil_HiddenArea)
 	{
-		for (float phi: phis) // inner ring (the ellipse) and outer ring (the image border) on the same rays
+		for (float phi: phis) // inner ring (the visible edge) and outer ring (the image border) on the same rays
 		{
-			auto [ix, iy] = ellipse(phi);
+			auto [ix, iy] = edge(phi);
 			auto [ox, oy] = rect(phi);
 			v.push_back(uv(ix, iy));
 			v.push_back(uv(ox, oy));
@@ -559,17 +575,19 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 			auto area = [&](uint16_t p, uint16_t q, uint16_t r) {
 				return std::fabs((v[q].x - v[p].x) * (v[r].y - v[p].y) - (v[q].y - v[p].y) * (v[r].x - v[p].x));
 			};
-			for (auto [p, q, r]: {std::tuple{a, b, d}, std::tuple{a, d, c}}) // where the ellipse touches the border: nothing hidden
+			for (auto [p, q, r]: {std::tuple{a, b, d}, std::tuple{a, d, c}}) // where the ellipse is outside the image: nothing hidden
 				if (area(p, q, r) > 1e-7f)
 					idx.insert(idx.end(), {p, q, r});
 		}
+		if (idx.empty())
+			v.clear(); // the image lies inside the lens outline (FOV cropped): no mask
 	}
 	else if (desc->StencilType == ovrFovStencil_VisibleArea)
 	{
 		v.push_back(uv(0, 0));
 		for (float phi: phis)
 		{
-			auto [x, y] = ellipse(phi);
+			auto [x, y] = edge(phi);
 			v.push_back(uv(x, y));
 		}
 		for (int i = 0; i < m; ++i)
@@ -579,7 +597,7 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 	{
 		for (float phi: phis)
 		{
-			auto [x, y] = ellipse(phi);
+			auto [x, y] = edge(phi);
 			v.push_back(uv(x, y));
 		}
 		for (int i = 0; i < m; ++i) // line list
@@ -587,11 +605,11 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetFovStencil(ovrSession session, const ovrFo
 	}
 	else if (desc->StencilType == ovrFovStencil_VisibleRectangle)
 	{
-		// the largest axis-aligned rectangle inside the ellipse along the diagonals (TopLeft, TopRight, BottomRight, BottomLeft)
-		auto [lx, ty] = ellipse(std::atan2(U, -L));
-		auto [rx, ty2] = ellipse(std::atan2(U, R));
-		auto [lx2, by] = ellipse(std::atan2(-D, -L));
-		auto [rx2, by2] = ellipse(std::atan2(-D, R));
+		// the largest axis-aligned rectangle inside the visible area along the diagonals (TopLeft, TopRight, BottomRight, BottomLeft)
+		auto [lx, ty] = edge(std::atan2(U, -L));
+		auto [rx, ty2] = edge(std::atan2(U, R));
+		auto [lx2, by] = edge(std::atan2(-D, -L));
+		auto [rx2, by2] = edge(std::atan2(-D, R));
 		float left = std::max(lx, lx2), right = std::min(rx, rx2), top = std::min(ty, ty2), bottom = std::max(by, by2);
 		v = {uv(left, top), uv(right, top), uv(right, bottom), uv(left, bottom)};
 	}

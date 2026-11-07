@@ -1353,12 +1353,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 			clear.info[0] = 5;
 			clear.effects[0] = 0.9f / std::max(state.settings.gamma, 0.1f);
 			clear.effects[1] = state.settings.use_stencil ? fov_stencil_margin : 0.f; // the hidden area black
-			const float h = state.settings.horizontal_fov > 0 ? state.settings.horizontal_fov : 1.f,
-			            v = state.settings.vertical_fov > 0 ? state.settings.vertical_fov : 1.f;
-			clear.a[0] = stream_fov[eye][0] * h; // the games' FOV (what the stencil was computed for)
-			clear.a[1] = stream_fov[eye][1] * h;
-			clear.a[2] = stream_fov[eye][2] * v;
-			clear.a[3] = stream_fov[eye][3] * v;
 			dispatch(target, black_view, clear);
 		}
 	}

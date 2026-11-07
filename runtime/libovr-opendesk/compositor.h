@@ -37,9 +37,10 @@ namespace od::ovr
 {
 void report(const char * fmt, ...); // stderr + the streamer's log (ovr_vd.cpp)
 
-// "Use Fov Stencil": the lens-shaped ellipse (in viewing angle, inscribed in the eye's FOV) grown by this factor; outside
-// it is the hidden area games may skip (ovr_GetFovStencil) and the compositor sends black
-constexpr float fov_stencil_margin = 1.05f;
+// "Use Fov Stencil": the lens-shaped ellipse (in viewing angle, inscribed in the headset's FOV) grown by this factor;
+// outside it is the hidden area games may skip (ovr_GetFovStencil) and the compositor sends black. 1.2 hides about 9%
+// of the image (1.05 hid 24% and cut into what the lenses show; stencils made for Quest headsets hide 6-14%).
+constexpr float fov_stencil_margin = 1.2f;
 
 struct swapchain
 {
