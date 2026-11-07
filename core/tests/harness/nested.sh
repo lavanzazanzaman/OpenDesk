@@ -4,6 +4,7 @@
 #   nested.sh WORKDIR SCENARIO [extra fake_headset env...]
 #   SCENARIO: MONITORS | VIDEOS | GAMES | VR | VRCLIENT | OVRAPP | HELLOXR | AUTOVR | AUTOXR | XREXIT | OPENVR | REJOIN | FOVEATED | FACE
 #             | XRBODY (body tracking through OpenDesk XR: joints, skeleton, emulated Vive trackers)
+#             | XRPOSE (controller grip relative to aim, printed: xr-pose-probe)
 #             | XRMASK (FOV stencil through OpenDesk XR: XR_KHR_visibility_mask; OPENDESK_TEST_NO_STENCIL=1: unchecked -> empty)
 #             | X11 (an X11 session: rootful Xwayland 1280x720 as the desktop, MIT-SHM capture)
 # Streamer log: WORKDIR/cache/OpenDesk/streamer.log
@@ -60,7 +61,7 @@ if [ -n "${OPENDESK_TEST_XRIZER_ZIP:-}" ]; then
 	printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { cp "%s" "$2"; exit 0; }; shift; done\nexit 1\n' "$OPENDESK_TEST_XRIZER_ZIP" > $W/bin/curl
 	chmod +x $W/bin/curl
 fi
-FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
+FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
  "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}}
@@ -119,6 +120,7 @@ sleep 2
 [ "$SCENARIO" = OVRAPP ] && (OPENDESK_OVR_LOG=1 $R/build/runtime/ovr-test-app 30 > $W/client.out 2>&1 &)
 [ "$SCENARIO" = XRMASK ] && (sleep 4; $R/build/runtime/xr-mask-test ${OPENDESK_TEST_NO_STENCIL:+off} > $W/client.out 2>&1) & [ "$SCENARIO" = XRMASK ] && C=\$!
 [ "$SCENARIO" = XRBODY ] && (sleep 4; $R/build/runtime/xr-body-test > $W/client.out 2>&1) & [ "$SCENARIO" = XRBODY ] && C=\$!
+[ "$SCENARIO" = XRPOSE ] && (sleep 4; $R/build/runtime/xr-pose-probe 6 > $W/client.out 2>&1) & [ "$SCENARIO" = XRPOSE ] && C=\$!
 [ "$SCENARIO" = XREXIT ] && ($R/build/runtime/xr-exit-test > $W/client.out 2>&1; $R/build/runtime/xr-exit-test headless >> $W/client.out 2>&1 &)
 # HELLOXR_HIDE_RUNTIME_DIR=1: the app gets another $XDG_RUNTIME_DIR (like Steam's pressure-vessel) -> abstract socket
 [ -n "$HELLOXR_HIDE_RUNTIME_DIR" ] && APP_ENV="XDG_RUNTIME_DIR=$RT/app" && mkdir -p $RT/app
