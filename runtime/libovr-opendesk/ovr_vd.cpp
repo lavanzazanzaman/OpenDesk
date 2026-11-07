@@ -452,7 +452,16 @@ OVR_PUBLIC_FUNCTION(ovrHmdDesc) ovr_GetHmdDesc(ovrSession session)
 	std::lock_guard lock(s->mutex);
 	s->refresh();
 	d.Type = ovrHmdType(23); // ovrHmd_Quest3 (OpenDesk XR's OVR_Ext.h); OpenDesk XR only needs a Quest-class type
-	std::snprintf(d.ProductName, sizeof(d.ProductName), "%s", s->state.hmd_type == 1000 ? "Meta Quest 3" : "Meta Quest");
+	// the model (OpenDesk XR picks controller pose conventions by it): MobileSettings.HmdType
+	const char * product = "Meta Quest";
+	switch (s->state.hmd_type)
+	{
+		case 320: product = "Meta Quest 2"; break;
+		case 400: product = "Meta Quest Pro"; break;
+		case 1000: product = "Meta Quest 3"; break;
+		case 1001: product = "Meta Quest 3S"; break;
+	}
+	std::snprintf(d.ProductName, sizeof(d.ProductName), "%s", product);
 	std::snprintf(d.Manufacturer, sizeof(d.Manufacturer), "Meta (OpenDesk, Linux)");
 	d.VendorId = 0x2833;
 	d.ProductId = 0x0200;
