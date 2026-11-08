@@ -20,7 +20,7 @@ _src() { echo "${OPENDESK_SRC:-$(realpath "$startdir/../..")}"; }
 
 pkgver() {
 	cd "$(_src)"
-	printf "1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+	printf "1.1.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {

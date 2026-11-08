@@ -66,6 +66,8 @@ Things OpenDesk adds on top of what the Windows streamer offers:
 - **Runs natively on Linux**, including Proton games
 - **[RiftLift](https://github.com/Villagers654/RiftLift) support**: Oculus PC games installed through RiftLift appear in
   the headset's Games tab and launch from there (see [Oculus games](#oculus-games-riftlift))
+- **[WayVR](https://github.com/wayvr-org/wayvr) and other OpenXR overlays**, drawn on top of your game or by themselves
+- **Startup apps**: choose apps to open with a VR game and close with it, from a detected list or by picking an AppImage
 - **OpenVR games without SteamVR**, through the bundled [xrizer](https://github.com/Supreeeme/xrizer)
 - **Your choice of graphics card**: run VR on either card, or split it so one renders the game while the other encodes
 - **Live VR encoder load**: the real encode time per frame, and what each quality option costs at your resolution
@@ -73,6 +75,7 @@ Things OpenDesk adds on top of what the Windows streamer offers:
 - **Built-in VRChat face tracking** over OSC with adjustable mouth sensitivity, no extra programs needed
 - **Larger fovea** (up to 50%), **adjustable periphery resolution** and an optional **soft fovea edge**
 - **Automatic version matching**, so newer headset apps neither refuse the PC nor ask you to update it
+- **Hand angle setting** for games where your hands look tilted
 - **Settings that match your hardware**: options your PC can't use are greyed out with an explanation
 
 ## Oculus games (RiftLift)
