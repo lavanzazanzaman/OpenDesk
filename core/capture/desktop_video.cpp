@@ -239,7 +239,9 @@ void desktop_video_sender::open_encoder(stream_state & st, const captured_frame 
 	{
 		try
 		{
-			encoder_config ec{w, h, params.fps, st.kbps, c, default_render_node(), params.full_range};
+			encoder_config ec{w, h, params.fps, st.kbps, c, desktop_encode_node(), params.full_range};
+			ec.source_node = default_render_node();
+			ec.preset = params.nvenc_preset;
 			ec.pre_encode = params.pre_encode;
 			ec.vbaq = params.vbaq;
 			st.encoder = std::make_unique<hardware_encoder>(ec);

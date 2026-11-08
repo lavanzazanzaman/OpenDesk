@@ -35,7 +35,8 @@ public:
 	void stop();
 	void restart();
 	void sendAccounts(const QStringList & accounts);
-	void applyOptions(); // live: codec / audio / VR test mode, no reconnect
+	void applyOptions();
+	void applyGpuSelection(); // live: codec / audio / VR test mode, no reconnect
 	void headsetAction(const QString & action); // BINDINGS -> headset
 
 	Status status() const { return status_; }

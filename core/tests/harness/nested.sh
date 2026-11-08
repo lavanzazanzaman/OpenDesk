@@ -10,6 +10,8 @@
 # Streamer log: WORKDIR/cache/OpenDesk/streamer.log
 # OPENDESK_STREAMER_BIN: another streamer binary (e.g. an extracted AppImage's AppRun)
 # Vulkan validation (every process): VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation [VK_LAYER_VALIDATE_SYNC=1 / VK_LAYER_GPUAV_ENABLE=1]
+# OPENDESK_TEST_GAME_GPU / OPENDESK_TEST_STREAMING_GPU=<PCI address>: "Use two graphics cards" on
+# OPENDESK_TEST_FIXED_PRESET=1: Adaptive encoder speed off (steady encode times with VR_MEASURE_SECONDS=12)
 # OPENDESK_TEST_ADAPTIVE_SPEED=1: pretend NVENC is overloaded (adaptive preset steps + encoder re-open)
 # HANDS=1 OPENDESK_TEST_HANDS=1 (OVRAPP): hand joints must come out in the controllers' space
 # FACE: OPENDESK_VRCHAT_OSC_DIR / OPENDESK_FACE_OSC_PORT point the face tracking output at a test avatar config and port
@@ -64,7 +66,7 @@ fi
 FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
- "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}}
+ "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
 J
 rm -f $W/config/OpenDesk/engine.json
 # the streamer's screenshots (ScreenshotToDesktop) go to $XDG_CONFIG_HOME/user-dirs.dirs' pictures folder, not ~/Pictures

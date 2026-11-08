@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "hardware_encoder.h"
 #include "settings.h"
 #include "sysinfo.h"
 
@@ -14,9 +15,17 @@
 #include <QStandardPaths>
 #include <QTimer>
 
+// which GPUs render and encode (read by the engine and the settings pages)
+void Engine::applyGpuSelection()
+{
+	const auto & s = StreamerSettings::instance();
+	od::set_gpu_selection(s.dualGpu ? s.gameGpu.toStdString() : std::string(), s.dualGpu ? s.streamingGpu.toStdString() : std::string());
+}
+
 Engine::Engine(QObject * parent) :
         QObject(parent)
 {
+	applyGpuSelection();
 	QDir().mkpath(QFileInfo(logPath()).path());
 	log_.setFileName(logPath());
 	if (!log_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
@@ -93,6 +102,8 @@ QJsonObject Engine::optionsJson() const
 	        {"aq", s.enableAQ},
 	        {"two_pass", s.enable2Pass},
 	        {"adaptive_speed", s.adaptiveEncoderSpeed},
+	        {"nvenc_preset", s.nvencQuality},
+	        {"gpu_selection", s.dualGpu ? s.gameGpu + "/" + s.streamingGpu : QString()},
 	        {"fovea_size", s.foveaSize},
 	        {"periphery_scale", s.peripheryScale},
 	        {"audio_mode", int(s.audioStreaming)},
@@ -204,6 +215,7 @@ void Engine::sendAccounts(const QStringList & accounts)
 
 void Engine::applyOptions()
 {
+	applyGpuSelection();
 	if (bool(native_) != wantNative() && (native_ || proc_.state() != QProcess::NotRunning))
 		return restart(); // switching backends (VR test grid needs the Python engine)
 	if (native_)

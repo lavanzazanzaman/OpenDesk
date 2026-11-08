@@ -18,7 +18,7 @@
 
 namespace od::ipc
 {
-constexpr uint32_t protocol_version = 14;
+constexpr uint32_t protocol_version = 15;
 constexpr size_t frame_data_size = 4992; // Upstream.Mobile.FrameData
 constexpr size_t skeleton_joint_bytes = 36, skeleton_max_joints = 84; // SkeletonDataChanged: joint, parent, pose
 constexpr uint32_t max_slots = 4;
@@ -92,6 +92,7 @@ struct image_desc
 	uint64_t size = 0;
 	uint32_t uv_offset = 0, full_range = 0;
 	uint64_t buffer_bytes = 0; // opaque buffers: the VkBuffer size (size: the allocation's)
+	uint32_t host_visible = 0; // opaque buffers in system memory (another GPU encodes; the exporter's memory type must be matched)
 	uint8_t device_uuid[16] = {}, driver_uuid[16] = {};
 };
 

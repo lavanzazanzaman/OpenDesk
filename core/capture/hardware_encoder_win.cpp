@@ -1036,6 +1036,12 @@ std::string vr_render_node()
 	return win::vr_node();
 }
 
+// (dual-GPU use is Linux only for now)
+std::string vr_encode_node() { return vr_render_node(); }
+std::string desktop_encode_node() { return default_render_node(); }
+void set_gpu_selection(const std::string &, const std::string &) {}
+std::vector<gpu_info> list_gpus() { return {}; }
+
 unsigned gpu_vendor(const std::string & node)
 {
 	auto a = win::adapter(node);

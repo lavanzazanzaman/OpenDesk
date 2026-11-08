@@ -449,6 +449,20 @@ void native_engine::set_options(QJsonObject o)
 		options.two_pass = o["two_pass"].toBool();
 	if (o.contains("adaptive_speed"))
 		options.adaptive_speed = o["adaptive_speed"].toBool();
+	if (o.contains("nvenc_preset"))
+		options.nvenc_preset = std::clamp(o["nvenc_preset"].toInt(4), 1, 7);
+	if (o.contains("gpu_selection") && o["gpu_selection"].toString() != options.gpu_selection)
+	{
+		options.gpu_selection = o["gpu_selection"].toString();
+		// the runtime's stream buffers depend on it: applied now unless a game holds them
+		if (vr && vr->has_client())
+			info("[vr] graphics card selection changed: it applies once the running VR game has closed and the streamer restarted");
+		else if (vr)
+		{
+			vr.reset();
+			QMetaObject::invokeMethod(this, [this] { update_vr_server(); if (current) update_video(true); }, Qt::QueuedConnection);
+		}
+	}
 	if (o.contains("periphery_scale"))
 		options.periphery_scale = std::clamp(o["periphery_scale"].toDouble(0.5), 0.3, 0.5);
 	if (o.contains("fovea_size"))
@@ -1122,6 +1136,7 @@ void native_engine::update_video(bool force)
 	p.full_range = current->user.value("IncreaseVideoNominalRange").toBool();
 	p.vbaq = options.aq;
 	p.pre_encode = options.two_pass;
+	p.nvenc_preset = options.nvenc_preset;
 
 	if (current->video && current->video->running() && p == current->video_params && !force)
 		return;
@@ -1535,7 +1550,10 @@ void native_engine::update_vr_server()
 #else
 			info(QString("[vr-ipc] OpenXR runtime socket ready: %1").arg(QString::fromStdString(ipc::socket_path())));
 #endif
-			if (vr_render_node() != default_render_node())
+			if (vr_encode_node() != vr_render_node())
+				info(QString("[vr] two graphics cards: VR games render on %1, the stream is encoded on %2")
+				             .arg(QString::fromStdString(vr_render_node()), QString::fromStdString(vr_encode_node())));
+			else if (vr_render_node() != default_render_node())
 				info(QString("[vr] VR apps render and encode on %1 (discrete GPU; the display runs on %2)")
 				             .arg(QString::fromStdString(vr_render_node()), QString::fromStdString(default_render_node())));
 		}
@@ -1604,6 +1622,7 @@ vr_stream_params native_engine::vr_params(session * sess) const
 	p.vbaq = options.aq;
 	p.pre_encode = options.two_pass;
 	p.adaptive_speed = options.adaptive_speed;
+	p.nvenc_preset = options.nvenc_preset;
 	// foveated streaming: the headset enables it (eye-tracked headsets, SharedMobileSettings.FoveatedStreaming); the fovea
 	// crop is the eye render size x "Fovea Size", in multiples of 64 like the Windows streamer - at least 384 x 384: AMD's
 	// HEVC / AV1 encoders take no narrower frames (VAAPI constraints: width 384-8192), small Fovea Sizes would fail there
@@ -1621,10 +1640,10 @@ void native_engine::start_vr(bool force)
 {
 	session * sess = current.get();
 	vr_stream_params p = vr_params(sess);
-	if (sess->video && sess->video->running() && !force && sess->vr_external == (vr && vr->has_client()) && sess->vr_params_signature == std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed, p.fovea_width, p.fovea_height, p.periphery_scale))
+	if (sess->video && sess->video->running() && !force && sess->vr_external == (vr && vr->has_client()) && sess->vr_params_signature == std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset, p.fovea_width, p.fovea_height, p.periphery_scale))
 		return;
 	sess->vr_external = vr && vr->has_client();
-	sess->vr_params_signature = std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed, p.fovea_width, p.fovea_height, p.periphery_scale);
+	sess->vr_params_signature = std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset, p.fovea_width, p.fovea_height, p.periphery_scale);
 	stop_video_source(sess);
 	auto tracking = sess->vr_tracking;
 	auto logger = [this](std::string line) { QMetaObject::invokeMethod(this, [this, line] { info(QString::fromStdString(line)); }); };

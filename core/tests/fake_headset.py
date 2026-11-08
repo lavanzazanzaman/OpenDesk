@@ -533,9 +533,10 @@ if __import__("os").environ.get("VR"):  # VR mode toggle (streamer started with 
     f = wait_format(lambda f: sources[-1] == 1, timeout=float(__import__("os").environ.get("VR_START_TIMEOUT", "8")))
     step("VR VideoFormat (Source=VR, 2 streams)", sources and sources[-1] == 1 and f[4] == 2, f)
     before = dict(stream_frames)
-    time.sleep(2)
+    vr_seconds = float(__import__("os").environ.get("VR_MEASURE_SECONDS", "2"))  # (longer: the streamer's 5 s statistics)
+    time.sleep(vr_seconds)
     l, r = stream_frames.get(0, 0) - before.get(0, 0), stream_frames.get(1, 0) - before.get(1, 0)
-    step("VR stereo frames ~72 fps", l >= 120 and abs(l - r) <= 2, (l, r))
+    step("VR stereo frames ~72 fps", l >= 60 * vr_seconds and abs(l - r) <= 2, (l, r))
     if __import__("os").environ.get("SPACEWARP"):  # an app through libovr-opendesk (OVRAPP/HELLOXR): half rate while it's on
         def rate(seconds=2):
             b0 = dict(stream_frames)

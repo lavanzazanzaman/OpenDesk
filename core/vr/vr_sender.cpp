@@ -34,14 +34,16 @@ captured_frame frame_of(const dmabuf_image & i)
 		f.av_sw_format = i.fourcc == ipc::fourcc_p010 ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
 		f.uv_offset = i.uv_offset;
 		f.buffer_bytes = i.buffer_bytes;
+		f.host_visible = i.host_visible;
 	}
 	return f;
 }
 } // namespace
 
 vr_sender::vr_sender(stream_channel & video, vr_stream_params p, callbacks c, bool test_pattern) :
-        channel(video), params(p), cb(std::move(c)), node(vr_render_node())
+        channel(video), params(p), cb(std::move(c)), node(vr_encode_node())
 {
+	preset = params.nvenc_preset;
 	if (test_pattern)
 		thread = std::thread(&vr_sender::run_test_pattern, this);
 	else
@@ -91,6 +93,7 @@ void vr_sender::open_encoders(const std::vector<const dmabuf_image *> & images)
 			{
 				int kbps = std::max(int(params.kbps * weight[k] / total), 1000);
 				encoder_config ec{int(images[k]->width), int(images[k]->height), params.fps, kbps, c, node, params.full_range};
+				ec.source_node = vr_render_node();
 				ec.vbaq = params.vbaq;
 				ec.pre_encode = params.pre_encode;
 				ec.preset = preset;
@@ -306,7 +309,7 @@ void vr_sender::adapt_speed(double ms)
 	int want = preset;
 	if (avg > 0.9 * budget && preset > 1)
 		want = preset - 1; // can't keep up: faster
-	else if (avg < 0.55 * budget && preset < 4 && now - preset_changed > 15s)
+	else if (avg < 0.55 * budget && preset < params.nvenc_preset && now - preset_changed > 15s)
 		want = preset + 1; // lots of headroom for a while: back towards the default
 	if (want == preset)
 		return;

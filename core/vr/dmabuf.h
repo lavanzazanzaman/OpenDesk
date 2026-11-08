@@ -31,6 +31,7 @@ struct dmabuf_image
 	uint64_t size = 0;     // opaque buffers: the allocation size
 	uint32_t uv_offset = 0; // opaque buffers (NV12/P010): chroma plane offset
 	uint64_t buffer_bytes = 0; // opaque buffers: the VkBuffer size (importers must create theirs identically)
+	bool host_visible = false; // opaque buffers in system memory (another GPU encodes them)
 	std::function<void()> release; // frees what owns the memory (opaque buffers)
 	uint64_t id = next_id();       // unique per allocation (fd numbers get reused)
 	static uint64_t next_id();

@@ -54,10 +54,10 @@ vr_server::vr_server(const std::string & render_node, callbacks c) :
 	// NVIDIA: exportable Vulkan memory (NVENC imports it through CUDA; its GBM has no linear render buffers).
 	// OPENDESK_VR_BUFFERS=opaque|dmabuf picks either on any GPU (tests).
 	const char * want = std::getenv("OPENDESK_VR_BUFFERS");
-	if (want ? std::string(want) == "opaque" : gpu_vendor(render_node) == 0x10de)
+	if (want ? std::string(want) == "opaque" : gpu_vendor(render_node) == 0x10de || vr_encode_node() != render_node) // (another GPU encodes: read back through this one)
 		try
 		{
-			vk_pool = std::make_unique<vk_buffer_pool>(render_node);
+			vk_pool = std::make_unique<vk_buffer_pool>(render_node, vr_encode_node() != render_node);
 		}
 		catch (const std::exception & e)
 		{
@@ -169,6 +169,7 @@ void vr_server::send_config(int fd)
 	c.image.size = i.size;
 	c.image.uv_offset = i.uv_offset;
 	c.image.buffer_bytes = i.buffer_bytes;
+	c.image.host_visible = i.host_visible;
 	c.image.full_range = full_range;
 	if (vk_pool)
 	{
@@ -188,6 +189,7 @@ void vr_server::send_config(int fd)
 		c.fovea_image.size = f.size;
 		c.fovea_image.uv_offset = f.uv_offset;
 		c.fovea_image.buffer_bytes = f.buffer_bytes;
+		c.fovea_image.host_visible = f.host_visible;
 		if (cb.log)
 			cb.log(std::format("[vr-ipc] foveated: {}x{} fovea per eye", f.width, f.height));
 	}

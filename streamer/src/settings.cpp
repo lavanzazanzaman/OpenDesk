@@ -98,6 +98,10 @@ void StreamerSettings::resetStreaming()
 	enableAQ = true;
 	enable2Pass = false;
 	adaptiveEncoderSpeed = true;
+	nvencQuality = 4;
+	dualGpu = false;
+	gameGpu.clear();
+	streamingGpu.clear();
 	encryptLocalTraffic = false;
 	autoAdjustBitrate = true;
 	reportedStreamerVersion = "1.20.3";
@@ -172,6 +176,11 @@ void StreamerSettings::load()
 	b("EnableAQ", enableAQ);
 	b("Enable2Pass", enable2Pass);
 	b("AdaptiveEncoderSpeed", adaptiveEncoderSpeed);
+	if (o.contains("NvencQuality"))
+		nvencQuality = o["NvencQuality"].toInt();
+	b("DualGpu", dualGpu);
+	s("GameGpu", gameGpu);
+	s("StreamingGpu", streamingGpu);
 	e("GamepadEmulation", gamepadEmulation);
 	e("AudioStreaming", audioStreaming);
 	b("UseVirtualAudioDriver", useVirtualAudioDriver);
@@ -234,6 +243,10 @@ void StreamerSettings::save()
 	o["EnableAQ"] = enableAQ;
 	o["Enable2Pass"] = enable2Pass;
 	o["AdaptiveEncoderSpeed"] = adaptiveEncoderSpeed;
+	o["NvencQuality"] = nvencQuality;
+	o["DualGpu"] = dualGpu;
+	o["GameGpu"] = gameGpu;
+	o["StreamingGpu"] = streamingGpu;
 	o["GamepadEmulation"] = int(gamepadEmulation);
 	o["AudioStreaming"] = int(audioStreaming);
 	o["UseVirtualAudioDriver"] = useVirtualAudioDriver;

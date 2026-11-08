@@ -16,7 +16,8 @@ namespace od
 class vk_buffer_pool
 {
 public:
-	explicit vk_buffer_pool(const std::string & render_node); // throws if the GPU can't export OPAQUE_FD memory
+	// throws if the GPU can't export OPAQUE_FD memory. host_visible: buffers in system memory, for an encoder on another GPU
+	explicit vk_buffer_pool(const std::string & render_node, bool host_visible = false);
 	~vk_buffer_pool();
 	vk_buffer_pool(const vk_buffer_pool &) = delete;
 	vk_buffer_pool & operator=(const vk_buffer_pool &) = delete;
@@ -39,7 +40,7 @@ class opaque_buffer_reader
 public:
 	explicit opaque_buffer_reader(const std::string & render_node);
 	~opaque_buffer_reader();
-	const uint8_t * read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id);
+	const uint8_t * read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id, bool host_visible = false);
 
 private:
 	struct impl;

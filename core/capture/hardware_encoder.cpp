@@ -29,6 +29,7 @@ extern "C" {
 #include <format>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <stdexcept>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -255,10 +256,106 @@ std::string default_render_node()
 	return "/dev/dri/renderD128";
 }
 
+namespace
+{
+std::mutex selection_mutex;
+std::string selected_game, selected_streaming; // PCI addresses
+
+std::string node_of_pci(const std::string & pci)
+{
+	if (pci.empty())
+		return {};
+	for (const gpu_info & g: list_gpus())
+		if (g.pci == pci)
+			return g.node;
+	return {}; // that card is gone: automatic
+}
+} // namespace
+
+void set_gpu_selection(const std::string & game_pci, const std::string & streaming_pci)
+{
+	std::lock_guard lock(selection_mutex);
+	selected_game = game_pci;
+	selected_streaming = streaming_pci;
+}
+
+std::vector<gpu_info> list_gpus()
+{
+	static const std::vector<gpu_info> gpus = [] { // (asked often; cards don't come and go while running)
+	std::vector<gpu_info> out;
+	VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+	app.apiVersion = VK_API_VERSION_1_1;
+	VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+	ici.pApplicationInfo = &app;
+	VkInstance instance;
+	if (vkCreateInstance(&ici, nullptr, &instance) != VK_SUCCESS)
+		return out;
+	uint32_t n = 0;
+	vkEnumeratePhysicalDevices(instance, &n, nullptr);
+	std::vector<VkPhysicalDevice> devices(n);
+	vkEnumeratePhysicalDevices(instance, &n, devices.data());
+	for (VkPhysicalDevice d: devices)
+	{
+		uint32_t count = 0;
+		vkEnumerateDeviceExtensionProperties(d, nullptr, &count, nullptr);
+		std::vector<VkExtensionProperties> ext(count);
+		vkEnumerateDeviceExtensionProperties(d, nullptr, &count, ext.data());
+		if (std::none_of(ext.begin(), ext.end(), [](auto & e) { return !std::strcmp(e.extensionName, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME); }))
+			continue;
+		VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+		VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &drm};
+		vkGetPhysicalDeviceProperties2(d, &props);
+		if (!drm.hasRender || props.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU)
+			continue;
+		gpu_info g;
+		g.node = "/dev/dri/renderD" + std::to_string(drm.renderMinor);
+		g.name = props.properties.deviceName;
+		if (const auto paren = g.name.find(" ("); paren != std::string::npos)
+			g.name.resize(paren); // "AMD Radeon RX 9070 XT (RADV GFX1201)"
+		g.vendor = gpu_vendor(g.node);
+		std::error_code ec;
+		g.pci = std::filesystem::canonical(std::filesystem::path("/sys/class/drm") / std::filesystem::path(g.node).filename() / "device", ec).filename().string();
+		out.push_back(std::move(g));
+	}
+	vkDestroyInstance(instance, nullptr);
+	return out;
+	}();
+	return gpus;
+}
+
+std::string vr_encode_node()
+{
+	if (const char * env = std::getenv("OPENDESK_VR_ENCODE_NODE"))
+		return env;
+	std::string pci;
+	{
+		std::lock_guard lock(selection_mutex);
+		pci = selected_streaming;
+	}
+	const std::string node = node_of_pci(pci);
+	return node.empty() ? vr_render_node() : node;
+}
+
+std::string desktop_encode_node()
+{
+	const std::string display = default_render_node(), streaming = vr_encode_node();
+	// (VAAPI can't take another card's desktop images; NVENC reads them back through the display's GPU)
+	return streaming != vr_render_node() && gpu_vendor(streaming) == 0x10de ? streaming : display;
+}
+
 std::string vr_render_node()
 {
 	if (const char * env = std::getenv("OPENDESK_VR_RENDER_NODE"))
 		return env;
+	{
+		std::string pci;
+		{
+			std::lock_guard lock(selection_mutex);
+			pci = selected_game;
+		}
+		if (const std::string node = node_of_pci(pci); !node.empty())
+			return node;
+	}
 	static const std::string chosen = [] {
 		const std::string display = default_render_node();
 		struct stat st{};
@@ -511,14 +608,14 @@ void hardware_encoder::note(const std::string & line)
 
 std::string hardware_encoder::input_path() const
 {
-	return std::string(backend()) + (cuda_input ? ", CUDA input" : cpu_copy ? ", CPU copy" : "");
+	return std::string(backend()) + (cuda_input ? ", CUDA input" : cuda_upload ? ", CUDA upload" : cpu_copy ? ", CPU copy" : "");
 }
 
 void hardware_encoder::prime(const captured_frame & f)
 {
 	cpu_copy = f.opaque_buffer || (nvenc && f.fd >= 0);
 	setup_filters(f);
-	if (!cuda_input)
+	if (!cuda_input && !cuda_upload)
 		return;
 	cpu_copy = false;
 	// one trial encode through CUDA (the output is dropped; the stream starts with an IDR anyway)
@@ -533,7 +630,7 @@ void hardware_encoder::prime(const captured_frame & f)
 		av_frame_free(&last_nv12);
 		avcodec_free_context(&codec);
 		cuda.reset();
-		cuda_input = false;
+		cuda_input = cuda_upload = false;
 		cuda_failed = true;
 		pts_origin = last_pts = -1;
 		setup_filters(f);
@@ -545,9 +642,9 @@ const captured_frame & hardware_encoder::host_frame(const captured_frame & f, ca
 	if (!f.opaque_buffer)
 		return f;
 	if (!opaque)
-		opaque = std::make_unique<opaque_buffer_reader>(cfg.render_node);
+		opaque = std::make_unique<opaque_buffer_reader>(cfg.source_node.empty() ? cfg.render_node : cfg.source_node);
 	storage = f;
-	storage.data = opaque->read(f.fd, f.size, f.buffer_bytes, f.buffer_id);
+	storage.data = opaque->read(f.fd, f.size, f.buffer_bytes, f.buffer_id, f.host_visible);
 	storage.fd = -1;
 	storage.opaque_buffer = false;
 	return storage;
@@ -616,13 +713,16 @@ void hardware_encoder::setup_nvenc(const captured_frame & f)
 	if (codec) return;
 	// Vulkan buffers (NV12/P010 from the runtime) go to NVENC through CUDA without a copy (WiVRn's way), when their
 	// bit depth is the codec's
-	cuda_input = false;
+	cuda_input = cuda_upload = false;
 	const auto yuv = AVPixelFormat(f.av_sw_format);
 	if (f.opaque_buffer && !cuda_failed && yuv == (is_10bit(cfg.codec) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12))
 		try
 		{
 			cuda = std::make_unique<cuda_state>(cuda_gpu(cfg.render_node), cfg.width, cfg.height, yuv);
-			cuda_input = true;
+			if (!cfg.source_node.empty() && cfg.source_node != cfg.render_node)
+				cuda_upload = true; // the frames are on another GPU: uploaded by DMA instead of imported
+			else
+				cuda_input = true;
 		}
 		catch (const std::exception & e)
 		{
@@ -634,8 +734,8 @@ void hardware_encoder::setup_nvenc(const captured_frame & f)
 	codec = avcodec_alloc_context3(enc);
 	codec->width = cfg.width; codec->height = cfg.height;
 	codec->time_base = {1, 1000000}; codec->framerate = {cfg.fps, 1};
-	codec->pix_fmt = cuda_input ? AV_PIX_FMT_CUDA : is_10bit(cfg.codec) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
-	if (cuda_input)
+	codec->pix_fmt = cuda_input || cuda_upload ? AV_PIX_FMT_CUDA : is_10bit(cfg.codec) ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
+	if (cuda_input || cuda_upload)
 		codec->hw_frames_ctx = av_buffer_ref(cuda->frames);
 	codec->bit_rate = int64_t(cfg.kbps) * 1000;
 	codec->rc_max_rate = codec->bit_rate;
@@ -659,11 +759,12 @@ void hardware_encoder::setup_nvenc(const captured_frame & f)
 	opt("rc-lookahead", "0"); opt("zerolatency", "1"); opt("delay", "0"); opt("forced-idr", "1");
 	if (intra_refresh)
 		opt("intra-refresh", "1");
-	if (!cuda_input) // with CUDA frames the frames' device decides
+	if (!cuda_input && !cuda_upload) // with CUDA frames the frames' device decides
 		check(av_opt_set_int(codec->priv_data, "gpu", cuda_gpu(cfg.render_node), 0), "NVENC GPU");
 	check(avcodec_open2(codec, enc, nullptr), "open NVENC encoder");
 	note(std::format("[encoder] {} on {}, preset p{}, multipass={}, spatial-aq={}{}{}", name, cfg.render_node, std::clamp(cfg.preset, 1, 7),
-	                 cfg.pre_encode ? "qres" : "disabled", int(cfg.vbaq), intra_refresh ? ", intra refresh" : "", cuda_input ? ", CUDA input" : ""));
+	                 cfg.pre_encode ? "qres" : "disabled", int(cfg.vbaq), intra_refresh ? ", intra refresh" : "",
+	                 cuda_input ? ", CUDA input" : cuda_upload ? ", CUDA upload" : ""));
 }
 
 void hardware_encoder::stage_nvenc(const captured_frame & frame)
@@ -700,11 +801,58 @@ void hardware_encoder::stage_nvenc(const captured_frame & frame)
 	AVPixelFormat format = AVPixelFormat(f.av_sw_format);
 	int stride = int(f.stride);
 	if (f.fd >= 0) {
-		if (!download) download = std::make_unique<readback>(cfg.render_node);
+		if (!download) download = std::make_unique<readback>(cfg.source_node.empty() ? cfg.render_node : cfg.source_node);
 		pixels = download->read(f, cfg.width, cfg.height);
 		format = AV_PIX_FMT_RGBA; stride = cfg.width * 4;
 	}
 	if (!pixels || stride <= 0) throw std::runtime_error("NVENC: invalid input frame");
+	if (cuda_upload)
+	{
+		// into CUDA memory by DMA: no CPU copy over the bus, and CUDA keeps the card out of its low power states
+		AVFrame * src = av_frame_alloc();
+		AVFrame * dst = av_frame_alloc();
+		src->format = format;
+		src->width = cfg.width;
+		src->height = cfg.height;
+		src->data[0] = const_cast<uint8_t *>(pixels);
+		src->linesize[0] = stride;
+		src->data[1] = const_cast<uint8_t *>(pixels + f.uv_offset);
+		src->linesize[1] = stride;
+		dst->format = AV_PIX_FMT_CUDA;
+		dst->width = cfg.width;
+		dst->height = cfg.height;
+		int err = av_hwframe_get_buffer(cuda->frames, dst, 0);
+		if (err >= 0)
+			err = av_hwframe_transfer_data(dst, src, 0);
+		av_frame_free(&src);
+		if (err < 0)
+		{
+			av_frame_free(&dst);
+			check(err, "CUDA upload");
+		}
+		av_frame_free(&last_nv12);
+		last_nv12 = dst;
+		if (pts_origin < 0) pts_origin = now_us();
+		return;
+	}
+	if (f.uv_offset && format == codec->pix_fmt)
+	{
+		// already the encoder's layout (the runtime's NV12/P010): FFmpeg's upload is the only copy. Valid until the next
+		// frame: VR frames are encoded right here, before their buffer goes back to the compositor
+		AVFrame * in = av_frame_alloc();
+		in->format = codec->pix_fmt;
+		in->width = cfg.width;
+		in->height = cfg.height;
+		in->buf[0] = av_buffer_create(const_cast<uint8_t *>(pixels), f.size, [](void *, uint8_t *) {}, nullptr, AV_BUFFER_FLAG_READONLY);
+		in->data[0] = const_cast<uint8_t *>(pixels);
+		in->linesize[0] = stride;
+		in->data[1] = const_cast<uint8_t *>(pixels + f.uv_offset);
+		in->linesize[1] = stride;
+		av_frame_free(&last_nv12);
+		last_nv12 = in;
+		if (pts_origin < 0) pts_origin = now_us();
+		return;
+	}
 	sws = sws_getCachedContext(sws, cfg.width, cfg.height, format, cfg.width, cfg.height, codec->pix_fmt, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
 	if (!sws) throw std::runtime_error("NVENC: RGB conversion unavailable");
 	const int * coefficients = sws_getCoefficients(SWS_CS_ITU709);

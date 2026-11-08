@@ -77,6 +77,7 @@ struct desktop_video_params
 	video_codec codec = video_codec::h264;
 	bool full_range = false; // SharedUserSettings.IncreaseVideoNominalRange
 	bool pre_encode = false; // StreamerSettings.Enable2Pass -> AMD pre-encode
+	int nvenc_preset = 4;    // "Encoder quality" (NVENC p1..p7)
 	bool vbaq = false;       // StreamerSettings.EnableAQ -> AMD VBAQ
 	bool operator==(const desktop_video_params &) const = default;
 };

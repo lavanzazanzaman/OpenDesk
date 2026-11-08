@@ -529,7 +529,7 @@ QWidget * makeStreamingPage(Engine & engine)
 	auto p = settingsPage([] { StreamerSettings::instance().resetStreaming(); });
 
 	// encoder options depend on the GPU(s) encoding: the desktop's and VR's (the same one except on hybrid laptops)
-	const std::string desktop_node = od::default_render_node(), vr_node = od::vr_render_node();
+	const std::string desktop_node = od::desktop_encode_node(), vr_node = od::vr_encode_node();
 	std::vector<std::string> nodes{vr_node};
 	if (desktop_node != vr_node)
 		nodes.push_back(desktop_node);
@@ -538,6 +538,12 @@ QWidget * makeStreamingPage(Engine & engine)
 	{
 		nvidia |= od::gpu_vendor(n) == 0x10de;
 		amd |= od::gpu_vendor(n) == 0x1002;
+	}
+	const auto gpus = od::list_gpus();
+	for (const auto & g: gpus) // (with two cards, either can become the encoder)
+	{
+		nvidia |= g.vendor == 0x10de;
+		amd |= g.vendor == 0x1002;
 	}
 
 	auto * video = card(p, "Video encoding");
@@ -562,10 +568,71 @@ QWidget * makeStreamingPage(Engine & engine)
 		                  (nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis"));
 	}
 	if (nvidia) // AMD/Intel already encode with their fastest preset
+	{
+		row(video, "NVIDIA encoder quality", "Higher quality takes the encoder longer per frame",
+		    combo<int>(170, {{2, "Fast"}, {4, "Balanced"}, {6, "Best quality"}}, s.nvencQuality, apply),
+		    "NVENC preset P2, P4 or P6. With Adaptive encoder speed, VR falls back to faster presets when this one can't\n"
+		    "keep up with the headset's refresh rate");
 		toggleRow(video, "Adaptive encoder speed", "Keeps the full frame rate in VR when encoding falls behind",
 		          s.adaptiveEncoderSpeed, apply,
 		          "Switches NVENC to faster presets while encoding can't keep up with the headset's refresh rate\n"
 		          "(slightly less detail per bit) and back once there is headroom again");
+	}
+
+	if (gpus.size() >= 2)
+	{
+		// sensible first choice: games where they run now, the stream on another card (an NVIDIA one if there is one)
+		if (s.gameGpu.isEmpty() || s.streamingGpu.isEmpty())
+		{
+			const std::string render = od::vr_render_node();
+			for (const auto & g: gpus)
+				if (g.node == render && s.gameGpu.isEmpty())
+					s.gameGpu = QString::fromStdString(g.pci);
+			for (const auto & g: gpus)
+				if (QString::fromStdString(g.pci) != s.gameGpu && (s.streamingGpu.isEmpty() || g.vendor == 0x10de))
+					s.streamingGpu = QString::fromStdString(g.pci);
+		}
+		auto * cards = card(p, "Graphics cards");
+		auto picker = [&gpus](QString & field, std::function<void()> after) {
+			auto * c = new QComboBox;
+			c->setFixedWidth(260);
+			for (const auto & g: gpus)
+				c->addItem(QString::fromStdString(g.name), QString::fromStdString(g.pci));
+			auto sync = [c, &field] {
+				QSignalBlocker b(c);
+				c->setCurrentIndex(std::max(0, c->findData(field)));
+			};
+			sync();
+			QObject::connect(c, &QComboBox::activated, c, [c, &field, after] {
+				field = c->currentData().toString();
+				StreamerSettings::instance().save();
+				after();
+			});
+			QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, c, sync);
+			return c;
+		};
+		// the encoders of the newly chosen cards decide which codecs are offered
+		auto gpus_changed = [&engine, codecs, apply] {
+			engine.applyGpuSelection();
+			std::vector<std::string> now{od::vr_encode_node()};
+			if (const std::string d = od::desktop_encode_node(); d != now[0])
+				now.push_back(d);
+			hideUnsupportedCodecs(codecs, now, apply);
+			apply();
+		};
+		toggleRow(cards, "Use two graphics cards", "One card runs the games, the other encodes the stream", s.dualGpu, gpus_changed,
+		          "The game keeps all of its card, frames are copied to the streaming card over PCIe.\n"
+		          "That copy needs a fast slot for the streaming card. Close VR games before changing this.");
+		auto * game = row(cards, "Game card", "VR games render here", picker(s.gameGpu, gpus_changed));
+		auto * streaming = row(cards, "Streaming card", "Encodes the video sent to the headset", picker(s.streamingGpu, gpus_changed));
+		auto sync_enabled = [game, streaming] {
+			const bool on = StreamerSettings::instance().dualGpu;
+			game->setEnabled(on);
+			streaming->setEnabled(on);
+		};
+		sync_enabled();
+		QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, game, sync_enabled);
+	}
 
 	auto * net = card(p, "Network");
 	toggleRow(net, "Automatically adjust bitrate", "Follows the bandwidth the headset measures", s.autoAdjustBitrate, apply,

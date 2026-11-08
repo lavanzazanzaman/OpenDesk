@@ -312,7 +312,7 @@ SetupItem encoder()
 		return std::pair{true, QString("%1 on %2 (%3)").arg(od::gpu_vendor(node) == 0x10de ? "NVENC" : "VAAPI", QString::fromStdString(node),
 		                                                  codecs.join(", "))};
 	};
-	const std::string desktop = od::default_render_node(), vr = od::vr_render_node();
+	const std::string desktop = od::desktop_encode_node(), vr = od::vr_encode_node();
 	auto [ok, detail] = probe(desktop);
 	item.ok = ok;
 	item.detail = detail;

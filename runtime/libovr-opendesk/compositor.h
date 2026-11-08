@@ -143,6 +143,7 @@ private:
 		VkBuffer buffer = VK_NULL_HANDLE;
 		VkDescriptorSet yuv_set = VK_NULL_HANDLE; // work image -> buffer (yuv.comp)
 		uint32_t pitch_words = 0, uv_offset_words = 0, p010 = 0, full_range = 0;
+		bool host_visible = false; // the buffer is system memory (another GPU encodes it): make the writes visible to the CPU
 		uint32_t width = 0, height = 0;
 		VkImage target() const { return work ? work : image; }
 		VkImageView target_view() const { return work ? work_view : view; }

@@ -34,6 +34,7 @@ struct vr_stream_params
 	bool full_range = false;
 	bool vbaq = false, pre_encode = false;
 	bool adaptive_speed = false; // NVENC: faster presets while encoding is slower than the frame period
+	int nvenc_preset = 4;        // NVENC p1..p7 ("Encoder quality"; adaptive speed only goes faster than this)
 	// foveated streaming (eye-tracked headsets): a fovea crop of this size per eye at render density, periphery at
 	// periphery_width x periphery_height (0: off)
 	int fovea_width = 0, fovea_height = 0;

@@ -924,8 +924,13 @@ void compositor::import_outputs(vr_client & client)
 				ded.buffer = o.buffer;
 				VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
 				mai.allocationSize = img.desc.size;
-				mai.memoryTypeIndex = memory_type(memory_properties, breq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+				// (OPAQUE_FD: the exporter's memory type)
+				mai.memoryTypeIndex = memory_type(memory_properties, breq.memoryTypeBits,
+				                                  img.desc.host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+				                                                                  VK_MEMORY_PROPERTY_HOST_CACHED_BIT
+				                                                        : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 				check(vkAllocateMemory(device, &mai, nullptr, &o.memory), "vkAllocateMemory(import stream buffer)");
+				o.host_visible = img.desc.host_visible;
 				fd.imported();
 				vkBindBufferMemory(device, o.buffer, o.memory, 0);
 				o.pitch_words = img.desc.stride / 4;
@@ -1413,8 +1418,13 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 				release[e].buffer = o.buffer;
 				release[e].size = VK_WHOLE_SIZE;
 			}
-			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, per_slot, release, 0,
-			                     nullptr);
+			VkMemoryBarrier to_host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+			to_host.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			to_host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+			const bool host = outputs[first_target].host_visible;
+			vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			                     host ? VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+			                     host ? 1 : 0, &to_host, per_slot, release, 0, nullptr);
 		}
 		else
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2 * per_slot, to_copy);

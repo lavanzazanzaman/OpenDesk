@@ -35,12 +35,13 @@ struct encoder_config
 	int fps = 60;
 	int kbps = 20000;
 	video_codec codec = video_codec::h264;
-	std::string render_node; // /dev/dri/renderD*; must be the GPU the compositor renders on
+	std::string render_node; // /dev/dri/renderD*: the GPU that encodes
 	bool full_range = false;  // full-range YUV + VUI flag (headset: IncreaseVideoNominalRange)
 	// NVENC options (and their AMD VAAPI equivalents through the quality-level bitfield):
 	bool pre_encode = false; // "2-Pass encoding": low-res pre-analysis pass for better rate control
 	bool vbaq = false;       // "Adaptive quantization": variance-based adaptive quantization
 	int preset = 4;          // NVENC p1 (fastest) .. p7
+	std::string source_node; // the GPU the frames are on, when another one renders them (empty: render_node)
 	bool operator==(const encoder_config &) const = default;
 };
 
@@ -58,6 +59,7 @@ struct captured_frame
 	uint64_t buffer_id = 0;     // identifies the allocation behind fd (imports are cached by it)
 	uint32_t uv_offset = 0;     // two-plane formats (NV12/P010): chroma plane offset
 	uint64_t buffer_bytes = 0;  // opaque buffers: the exporter's VkBuffer size
+	bool host_visible = false;  // opaque buffers in system memory: mapped directly
 #ifdef _WIN32
 	// Windows desktop capture on the GPU: a BGRA ID3D11Texture2D on this ID3D11Device (valid during the call)
 	void * d3d11_device = nullptr;
@@ -151,7 +153,7 @@ private:
 	std::unique_ptr<opaque_buffer_reader> opaque; // Vulkan OPAQUE_FD buffers without CUDA
 	struct cuda_state;                            // NVENC: OPAQUE_FD buffers imported into CUDA, encoded in place
 	std::unique_ptr<cuda_state> cuda;
-	bool cuda_input = false;
+	bool cuda_input = false, cuda_upload = false; // CUDA frames imported in place, or (frames on another GPU) uploaded
 	bool cuda_failed = false; // the CUDA input path failed once: CPU copies from then on
 	bool cpu_copy = false;    // the last staged frame went through a CPU copy
 	SwsContext * sws = nullptr;
@@ -177,6 +179,18 @@ std::string default_render_node();
 // The GPU for VR (apps render there, its buffers and encoder live there): the display GPU, except on hybrid laptops
 // whose display runs on an integrated GPU, where the discrete one (OPENDESK_VR_RENDER_NODE overrides).
 std::string vr_render_node();
+// the GPU encoding VR (vr_render_node() unless two cards are in use) and the desktop (the display's unless the
+// streaming card can take its frames)
+std::string vr_encode_node();
+std::string desktop_encode_node();
+// dual-GPU use (PCI addresses like 0000:03:00.0; empty: automatic / one card for everything)
+void set_gpu_selection(const std::string & game_pci, const std::string & streaming_pci);
+struct gpu_info
+{
+	std::string node, pci, name;
+	unsigned vendor = 0;
+};
+std::vector<gpu_info> list_gpus();
 unsigned gpu_vendor(const std::string & render_node);
 // Linux: opens the VAAPI device and looks for the H.264 encoder; Windows: tries the available encoders.
 // Empty string = usable, else the reason.

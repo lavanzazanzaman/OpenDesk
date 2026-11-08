@@ -186,11 +186,13 @@ VkBuffer create_buffer(VkDevice device, uint64_t size, VkBufferUsageFlags usage)
 struct vk_buffer_pool::impl : gpu
 {
 	using gpu::gpu;
+	bool host_visible = false;
 };
 
-vk_buffer_pool::vk_buffer_pool(const std::string & node) :
+vk_buffer_pool::vk_buffer_pool(const std::string & node, bool host_visible) :
         p(std::make_shared<impl>(node))
 {
+	p->host_visible = host_visible;
 #ifdef _WIN32
 	if (!p->get_handle)
 		throw std::runtime_error("vkGetMemoryWin32HandleKHR unavailable");
@@ -243,7 +245,11 @@ std::unique_ptr<dmabuf_image, void (*)(dmabuf_image *)> vk_buffer_pool::allocate
 	ded.buffer = buffer;
 	VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
 	mai.allocationSize = req.size;
-	mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	// an encoder on another GPU: system memory the compositor writes and the encoder's CPU side reads, no extra GPU copy
+	static constexpr VkMemoryPropertyFlags host_flags =
+	        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+	mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, p->host_visible ? host_flags : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+	img->host_visible = p->host_visible && (p->memory.memoryTypes[mai.memoryTypeIndex].propertyFlags & host_flags) == host_flags;
 	VkDeviceMemory memory;
 	if (VkResult r = vkAllocateMemory(p->device, &mai, nullptr, &memory); r != VK_SUCCESS)
 	{
@@ -283,6 +289,7 @@ struct opaque_buffer_reader::impl : gpu
 		VkBuffer buffer = VK_NULL_HANDLE;
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		uint64_t size = 0;
+		void * mapped = nullptr; // system-memory buffers: read in place
 	};
 	std::map<uint64_t, imported> buffers; // by dmabuf_image::id
 	VkBuffer staging = VK_NULL_HANDLE;
@@ -329,7 +336,7 @@ opaque_buffer_reader::opaque_buffer_reader(const std::string & node) :
 
 opaque_buffer_reader::~opaque_buffer_reader() = default;
 
-const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id)
+const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id, bool host_visible)
 {
 	auto it = p->buffers.find(buffer_id);
 	if (it == p->buffers.end() && p->buffers.size() >= 12) // the pool was replaced: forget the old imports
@@ -359,7 +366,9 @@ const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint
 		ded.buffer = b.buffer;
 		VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
 		mai.allocationSize = size;
-		mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		mai.memoryTypeIndex = memory_type(p->memory, req.memoryTypeBits,
+		                                  host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT
+		                                               : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		if (VkResult r = vkAllocateMemory(p->device, &mai, nullptr, &b.memory); r != VK_SUCCESS)
 		{
 #ifndef _WIN32
@@ -369,8 +378,12 @@ const uint8_t * opaque_buffer_reader::read(native_handle fd, uint64_t size, uint
 			check(r, "vkAllocateMemory(import VR buffer)");
 		}
 		vkBindBufferMemory(p->device, b.buffer, b.memory, 0);
+		if (host_visible)
+			check(vkMapMemory(p->device, b.memory, 0, VK_WHOLE_SIZE, 0, &b.mapped), "vkMapMemory(VR buffer)");
 		it = p->buffers.emplace(buffer_id, b).first;
 	}
+	if (it->second.mapped) // the compositor's work is done before the streamer gets the frame
+		return static_cast<const uint8_t *>(it->second.mapped);
 	if (p->staging_size < buffer_bytes)
 	{
 		if (p->staging_memory)
