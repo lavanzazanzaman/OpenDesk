@@ -277,6 +277,17 @@ struct session_state
 	bool should_recenter = false;
 	uint32_t recenter_serial = 0;
 	double recenter_at = 0; // when to apply the headset's recenter (0: none pending)
+	// where the new origin is in the old space (the head just before the recenter, upright): for the apps that ask
+	math::quat recenter_yaw{0, 0, 0, 1};
+	math::vec3 recenter_position{};
+	double recenter_watch_until = 0; // the headset's new space can arrive after recenter_at: a jump in the poses until then
+	int64_t watched_time = 0;
+	math::vec3 watched_position{};
+	// the last head pose before a jump: the headset's moved space can arrive before its recenter message
+	frame_data::pose settled_head{};
+	bool have_settled_head = false;
+	int64_t settled_time = 0;
+	int jumped_frames = 0;
 
 	double period = 1.0 / 72;
 	double next_frame = 0;
@@ -596,9 +607,23 @@ struct session_state
 		update_overlay_links();
 		client->read_state(state);
 		state_time = now_seconds();
+		if (state.frame_data_time_ns != settled_time)
+		{
+			settled_time = state.frame_data_time_ns;
+			const frame_data::pose now = raw_head();
+			const math::vec3 d = math::sub(now.position, settled_head.position);
+			const bool jump = have_settled_head && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 0.15f * 0.15f;
+			if (!jump || ++jumped_frames > 30) // (a jump nobody announced is just where the head is now)
+			{
+				settled_head = now;
+				have_settled_head = true;
+				jumped_frames = 0;
+			}
+		}
 		if (recenter_serial != state.settings.recenter_serial) {
 			recenter_serial = state.settings.recenter_serial;
 			recenter_at = state_time + 0.1; // the headset's own recenter: its next poses are in the moved space
+			remember_recenter_origin();
 		}
 		if (state.frame_period_ns > 0)
 			period = double(state.frame_period_ns) * 1e-9;
@@ -610,11 +635,41 @@ struct session_state
 		{
 			recenter_at = 0;
 			if (recenter(false))
+			{
 				should_recenter = true;
+				recenter_watch_until = state_time + 1.0;
+				watched_time = 0;
+			}
+		}
+		// The headset's new space arrived after we looked: the head jumped in one frame, and the origin we took is stale.
+		if (recenter_watch_until > 0 && state.frame_data_time_ns != watched_time)
+		{
+			const math::vec3 now = raw_head().position;
+			const math::vec3 d = math::sub(now, watched_position);
+			const bool jumped = watched_time != 0 && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 0.15f * 0.15f;
+			watched_time = state.frame_data_time_ns;
+			watched_position = now;
+			if (jumped && recenter(false))
+				should_recenter = true;
+			if (state_time >= recenter_watch_until)
+				recenter_watch_until = 0;
 		}
 	}
 
 	frame_data::pose raw_head() const { return frame_data::head(state.frame_data); }
+
+	void remember_recenter_origin()
+	{
+		frame_data::pose h = have_settled_head ? settled_head : raw_head();
+		jumped_frames = 31; // the next pose is the new space's
+		math::quat q = h.orientation;
+		math::vec3 p = h.position;
+		to_app(q, p);
+		const math::vec3 forward = math::rotate(math::normalize(q), {0, 0, -1});
+		const float yaw = std::atan2(-forward[0], -forward[2]);
+		recenter_yaw = math::yaw(yaw);
+		recenter_position = p;
+	}
 
 	// The app's forward = where the head looks now. Only from a real head pose: before the headset tracks (or while
 	// it sends an all-zero pose) the forward vector is (0, 0, 0), and atan2(-0, -0) is -180 degrees - games then
@@ -779,6 +834,15 @@ OVR_PUBLIC_FUNCTION(void) ovr_Destroy(ovrSession session)
 }
 
 // libovr-opendesk extensions for XR_EXTX_overlay
+// libovr-opendesk extension: where the new origin of the last recenter lies in the old tracking space (upright)
+OVRVD_EXPORT void ovrvd_GetRecenterPose(ovrSession session, ovrPosef * pose)
+{
+	auto * s = S(session);
+	std::lock_guard lock(s->mutex);
+	pose->Orientation = {s->recenter_yaw[0], s->recenter_yaw[1], s->recenter_yaw[2], s->recenter_yaw[3]};
+	pose->Position = {s->recenter_position[0], s->recenter_position[1], s->recenter_position[2]};
+}
+
 OVRVD_EXPORT void ovrvd_SetOverlay(ovrSession session)
 {
 	auto * s = S(session);

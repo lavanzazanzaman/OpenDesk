@@ -294,6 +294,12 @@ if __import__("os").environ.get("RECENTER_TEST"):  # standing 1 m / 2 m off the 
         data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
         time.sleep(0.05)
     msg.sendall(writer.encode(bytes([29]) + (0).to_bytes(4, "big")))  # MessageType.Recenter
+    if __import__("os").environ.get("RECENTER_LATE"):  # the headset's new space arrives after the streamer has looked
+        for i in range(8):
+            struct.pack_into("<i", away, 0, 70 + i)
+            comp = lz4.block.compress(bytes(away), store_size=False)
+            data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
+            time.sleep(0.05)
     for i in range(30):
         struct.pack_into("<i", fd, 0, 100 + i)
         comp = lz4.block.compress(bytes(fd), store_size=False)

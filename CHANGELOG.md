@@ -2,6 +2,11 @@
 
 The streamer's What's New tab and the GitHub release notes are both made from this file. Newest version first.
 
+## 1.1.2
+
+- Recentering tells games where the new centre is, for games like Beat Saber that were placing you in the wrong spot
+- Recentering no longer lands in the wrong place when the headset's new position arrives late
+
 ## 1.1.1
 
 - Fixed the headset microphone: apps can now use the OpenDesk Microphone input, and it no longer plays through your speakers

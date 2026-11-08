@@ -36,6 +36,7 @@ static constexpr int ovrControllerType_Index = 0x1000;
 // libovr-opendesk extensions (Linux and Windows)
 static constexpr uint32_t ovrvd_FrameDataSize = 4992; // VirtualDesktop.Mobile.FrameData
 extern "C" void ovrvd_SetOverlay(ovrSession session);
+extern "C" void ovrvd_GetRecenterPose(ovrSession session, ovrPosef* pose);
 extern "C" bool ovrvd_MainSessionVisible(ovrSession session);
 extern "C" ovrResult ovrvd_SetSynchronizationQueueFamilyVk(ovrSession session, uint32_t queueFamilyIndex);
 extern "C" ovrResult ovrvd_SetSessionPhysicalDeviceVk(ovrSession session, VkInstance instance, VkPhysicalDevice physicalDevice);

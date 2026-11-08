@@ -391,8 +391,15 @@ namespace opendesk_openxr {
                                          : m_shouldRecenter == 2 ? XR_REFERENCE_SPACE_TYPE_LOCAL
                                                                  : XR_REFERENCE_SPACE_TYPE_STAGE;
             buffer->changeTime = m_recenterTime;
-            buffer->poseValid = XR_FALSE;
-            buffer->poseInPreviousSpace = xr::math::Pose::Identity();
+            // Where the new origin is in the old space. Apps that receive this (Unity's OpenXR plugin: Beat Saber) rely on
+            // it; "unknown" made them place the player wrongly.
+            ovrPosef moved{};
+            ovrvd_GetRecenterPose(m_ovrSession, &moved);
+            buffer->poseValid = XR_TRUE;
+            buffer->poseInPreviousSpace = ovrPoseToXrPose(moved);
+            if (buffer->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL) {
+                buffer->poseInPreviousSpace.position.y = 0; // floor-level spaces stay on the floor
+            }
 
             TraceLoggingWrite(g_traceProvider,
                               "xrPollEvent",

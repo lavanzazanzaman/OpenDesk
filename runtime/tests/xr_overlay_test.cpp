@@ -122,7 +122,8 @@ int main(int argc, char ** argv)
 	XrSessionCreateInfoOverlayEXTX overlay{XR_TYPE_SESSION_CREATE_INFO_OVERLAY_EXTX};
 	overlay.sessionLayersPlacement = 5;
 	XrGraphicsBindingVulkan2KHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR};
-	binding.next = &overlay;
+	if (!std::getenv("XR_TEST_NOT_OVERLAY")) // a normal app, to see what normal apps are told
+		binding.next = &overlay;
 	binding.instance = vk;
 	binding.physicalDevice = physical;
 	binding.device = device;
@@ -190,6 +191,14 @@ int main(int argc, char ** argv)
 					CHECK(xrEndSession(session));
 					running = false;
 				}
+			}
+			else if (ev.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING)
+			{
+				auto * c = reinterpret_cast<XrEventDataReferenceSpaceChangePending *>(&ev);
+				std::printf("ok    space change: type %d poseValid %d position (%.2f %.2f %.2f) orientation (%.3f %.3f %.3f %.3f)\n", int(c->referenceSpaceType),
+				            int(c->poseValid), c->poseInPreviousSpace.position.x, c->poseInPreviousSpace.position.y, c->poseInPreviousSpace.position.z,
+				            c->poseInPreviousSpace.orientation.x, c->poseInPreviousSpace.orientation.y, c->poseInPreviousSpace.orientation.z,
+				            c->poseInPreviousSpace.orientation.w);
 			}
 			else if (ev.type == XR_TYPE_EVENT_DATA_MAIN_SESSION_VISIBILITY_CHANGED_EXTX)
 			{
