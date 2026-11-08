@@ -328,6 +328,21 @@ namespace opendesk_openxr {
             return XR_ERROR_HANDLE_INVALID;
         }
 
+        // Overlay apps: whether a game is showing under them.
+        if (m_isOverlaySession && m_sessionCreated && m_ovrSession) {
+            const bool visible = ovrvd_MainSessionVisible(m_ovrSession);
+            if (visible != m_mainSessionVisible) {
+                m_mainSessionVisible = visible;
+                XrEventDataMainSessionVisibilityChangedEXTX* const changed =
+                    reinterpret_cast<XrEventDataMainSessionVisibilityChangedEXTX*>(eventData);
+                changed->type = XR_TYPE_EVENT_DATA_MAIN_SESSION_VISIBILITY_CHANGED_EXTX;
+                changed->next = nullptr;
+                changed->visible = visible ? XR_TRUE : XR_FALSE;
+                changed->flags = 0;
+                return XR_SUCCESS;
+            }
+        }
+
         // Generate session events.
         updateSessionState();
         if (!m_sessionEventQueue.empty()) {
@@ -521,6 +536,12 @@ namespace opendesk_openxr {
 
         m_extensionsTable.push_back( // Layer alpha (xrizer: OpenVR overlay fades, loading screens).
             {XR_KHR_COMPOSITION_LAYER_COLOR_SCALE_BIAS_EXTENSION_NAME, XR_KHR_composition_layer_color_scale_bias_SPEC_VERSION});
+
+        m_extensionsTable.push_back(
+            {XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME, XR_KHR_composition_layer_equirect2_SPEC_VERSION});
+
+        // Overlay apps (WayVR): composited over the running game, see libovr-opendesk.
+        m_extensionsTable.push_back({XR_EXTX_OVERLAY_EXTENSION_NAME, XR_EXTX_overlay_SPEC_VERSION});
 
 #ifdef HAS_CYLINDER_LAYERS
         m_extensionsTable.push_back( // Cylinder layers.

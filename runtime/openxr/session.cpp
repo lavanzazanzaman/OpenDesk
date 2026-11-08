@@ -61,6 +61,15 @@ namespace opendesk_openxr {
             return XR_ERROR_LIMIT_REACHED;
         }
 
+        // An overlay session (XR_EXTX_overlay) is chained anywhere after the create info.
+        m_isOverlaySession = false;
+        m_mainSessionVisible = false;
+        for (auto chained = reinterpret_cast<const XrBaseInStructure*>(createInfo->next); chained; chained = chained->next) {
+            if (has_XR_EXTX_overlay && chained->type == XR_TYPE_SESSION_CREATE_INFO_OVERLAY_EXTX) {
+                m_isOverlaySession = true;
+            }
+        }
+
         // Get the graphics device and initialize the necessary resources.
         bool hasGraphicsBindings = false;
         const XrBaseInStructure* entry = reinterpret_cast<const XrBaseInStructure*>(createInfo->next);
@@ -121,6 +130,10 @@ namespace opendesk_openxr {
             // We initialize a submission device since OVR needs one to create a swapchain before being able to wait
             // frames.
             initializeSubmissionDevice("Headless");
+        }
+
+        if (m_isOverlaySession && m_ovrSession) {
+            ovrvd_SetOverlay(m_ovrSession);
         }
 
         // Read configuration and set up the session accordingly.

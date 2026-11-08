@@ -431,6 +431,21 @@ namespace opendesk_openxr {
                 m_eyeTrackingType = EyeTracking::Simulated;
             }
 
+            // Controllers: the PC calibration is what games were made against. A few (CONVRGENCE) line up with the
+            // headset's own grip instead; "Hand angle" in the streamer can force either.
+            {
+                std::ifstream file("/proc/self/cmdline", std::ios::binary);
+                std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                text += m_applicationName;
+                std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                const bool knownGame = text.find("convrgence") != std::string::npos;
+                m_useHeadsetGripPose = ovr_GetBool(m_ovrSession, "HandPoseHeadset", false) ||
+                                       (knownGame && !ovr_GetBool(m_ovrSession, "HandPosePc", false));
+                if (knownGame) {
+                    Log("Hand angle: %s\n", m_useHeadsetGripPose ? "headset grip" : "PC calibration");
+                }
+            }
+
             if (m_bodyState) {
                 m_supportsHandTracking = ovr_GetBool(m_ovrSession, "SupportsHandTracking", false);
                 m_supportsFaceTracking = ovr_GetBool(m_ovrSession, "SupportsFaceTracking", false);

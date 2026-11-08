@@ -80,6 +80,8 @@ std::unique_ptr<vr_client> vr_client::connect(const std::string & application, s
 vr_client::~vr_client()
 {
 	drop_config();
+	for (auto & [link, host]: overlay_links)
+		close(link);
 	if (state)
 		munmap(const_cast<ipc::shared_state *>(state), state_size);
 	if (fd >= 0)
@@ -162,10 +164,32 @@ bool vr_client::poll(int timeout_ms)
 			if (r2.generation == config_.generation && r2.slot < busy.size())
 				busy[r2.slot] = false;
 		}
+		else if (type == ipc::msg::overlay_link && size_t(n) >= sizeof(ipc::overlay_link_msg) && fds.size() == 1)
+		{
+			ipc::overlay_link_msg l;
+			std::memcpy(&l, buf, sizeof(l));
+			overlay_links.emplace_back(fds[0], l.host != 0);
+		}
 		else
 			for (int f: fds)
 				close(f);
 	}
+}
+
+int vr_client::take_overlay_link(bool & host)
+{
+	if (overlay_links.empty())
+		return -1;
+	auto [link, is_host] = overlay_links.front();
+	overlay_links.erase(overlay_links.begin());
+	host = is_host;
+	return link;
+}
+
+void vr_client::declare_overlay()
+{
+	ipc::overlay_msg m;
+	send(fd, &m, sizeof(m), MSG_NOSIGNAL);
 }
 
 void vr_client::read_state(ipc::shared_state & out) const

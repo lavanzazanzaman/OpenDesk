@@ -2187,6 +2187,12 @@ namespace RUNTIME_NAMESPACE {
 		else if (extensionName == "XR_KHR_composition_layer_depth") {
 			has_XR_KHR_composition_layer_depth = true;
 		}
+		else if (extensionName == "XR_KHR_composition_layer_equirect2") {
+			has_XR_KHR_composition_layer_equirect2 = true;
+		}
+		else if (extensionName == "XR_EXTX_overlay") {
+			has_XR_EXTX_overlay = true;
+		}
 		else if (extensionName == "XR_KHR_composition_layer_cylinder") {
 			has_XR_KHR_composition_layer_cylinder = true;
 		}

@@ -143,6 +143,8 @@ namespace RUNTIME_NAMESPACE {
 		bool has_XR_KHR_vulkan_enable2{false};
 		bool has_XR_KHR_composition_layer_depth{false};
 		bool has_XR_KHR_composition_layer_cylinder{false};
+		bool has_XR_EXTX_overlay{false};
+		bool has_XR_KHR_composition_layer_equirect2{false};
 		bool has_XR_KHR_composition_layer_cube{false};
 		bool has_XR_KHR_visibility_mask{false};
 		bool has_XR_KHR_convert_timespec_time{false};

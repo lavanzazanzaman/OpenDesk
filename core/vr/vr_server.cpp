@@ -215,6 +215,14 @@ void vr_server::send_config(int fd)
 
 void vr_server::run()
 {
+    auto update_game = [&] {
+        auto current = peers.find(client_fd.load());
+        const bool running = current != peers.end() && !current->second.overlay && current->second.rendering;
+        if (running != game_running) {
+            game_running = running;
+            if (cb.game) cb.game(running);
+        }
+    };
     auto select = [&](int fd) {
         client_fd = fd;
         submitted = false;
@@ -234,7 +242,36 @@ void vr_server::run()
             submitted = false;
             peer_pid = 0;
             if (cb.client) cb.client(false, app);
-            if (!peers.empty()) select(peers.begin()->first);
+            // an overlay that was drawn into this app goes back to showing by itself
+            auto overlay = std::find_if(peers.begin(), peers.end(), [](const auto & e) { return e.second.overlay && e.second.rendering; });
+            if (overlay != peers.end()) {
+                select(overlay->first);
+                submitted = true;
+                if (cb.first_frame) cb.first_frame();
+            }
+            else if (!peers.empty()) select(peers.begin()->first);
+            update_game();
+        }
+    };
+    // every overlay gets a socket to the game that is rendering (it composites them over its own frames)
+    auto link_overlays = [&] {
+        auto host = peers.find(client_fd.load());
+        if (host == peers.end() || host->second.overlay || !host->second.rendering) return;
+        for (auto & [fd, other]: peers) {
+            if (!other.overlay || other.linked_host == host->second.serial) continue;
+            int ends[2];
+            if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) continue;
+            ipc::overlay_link_msg m;
+            m.host = 1;
+            bool ok = send_with_fds(host->first, &m, sizeof(m), {ends[0]});
+            m.host = 0;
+            ok = ok && send_with_fds(fd, &m, sizeof(m), {ends[1]});
+            close(ends[0]);
+            close(ends[1]);
+            if (ok) {
+                other.linked_host = host->second.serial;
+                if (cb.log) cb.log("[vr-ipc] overlay " + other.app + " is drawn into " + host->second.app);
+            }
         }
     };
     auto configure = [&](int fd) {
@@ -314,14 +351,29 @@ void vr_server::run()
             if (n < ssize_t(sizeof(ipc::msg))) { disconnect(fd); continue; }
             ipc::msg type; std::memcpy(&type, buf, sizeof(type));
             if (type == ipc::msg::rendering || type == ipc::msg::submit) {
+                auto & self = peers.at(fd);
+                self.rendering = true;
                 if (client_fd.load() != fd) {
-                    if (submitted.load()) {
+                    auto current = peers.find(client_fd.load());
+                    const bool busy = submitted.load() && current != peers.end();
+                    if (busy && self.overlay) { // a game (or another overlay) has the headset: this one goes over the link
+                        if (type == ipc::msg::submit && size_t(n) >= sizeof(ipc::submit_msg)) {
+                            ipc::submit_msg s; std::memcpy(&s, buf, sizeof(s));
+                            ipc::release_msg r; r.generation = s.generation; r.slot = s.slot;
+                            send(fd, &r, sizeof(r), MSG_NOSIGNAL);
+                        }
+                        link_overlays();
+                        continue;
+                    }
+                    if (busy && !current->second.overlay) {
                         if (cb.log) cb.log("[vr-ipc] a second rendering app was refused; probes may coexist");
                         disconnect(fd); continue;
                     }
-                    select(fd);
+                    select(fd); // nothing renders, or a game takes over from an overlay
                 }
                 if (!submitted.exchange(true) && cb.first_frame) cb.first_frame();
+                link_overlays();
+                update_game();
             }
             if (type == ipc::msg::submit && size_t(n) >= sizeof(ipc::submit_msg)) {
                 if (stall_reported && cb.log)
@@ -355,7 +407,11 @@ void vr_server::run()
                     ipc::release_msg r; r.generation = s.generation; r.slot = s.slot;
                     send(fd, &r, sizeof(r), MSG_NOSIGNAL);
                 }
-            } else if (type == ipc::msg::haptics && fd == client_fd.load() &&
+            } else if (type == ipc::msg::overlay) {
+                peers.at(fd).overlay = true;
+                link_overlays();
+                update_game();
+            } else if (type == ipc::msg::haptics && (fd == client_fd.load() || peers.at(fd).overlay) &&
                        size_t(n) >= sizeof(ipc::haptics_msg) && cb.haptics) {
                 ipc::haptics_msg h; std::memcpy(&h, buf, sizeof(h)); cb.haptics(h);
             } else if (type == ipc::msg::recenter && fd == client_fd.load() && cb.recenter) cb.recenter();
@@ -400,6 +456,7 @@ void vr_server::run()
     for (const auto & [fd, peer]: peers) close(fd);
     peers.clear();
     client_fd = -1;
+    update_game();
     peer_pid = 0;
     submitted = false;
 }

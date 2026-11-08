@@ -20,6 +20,9 @@
 #include <cstring>
 #include <ctime>
 #include <memory>
+#include <cstddef>
+#include <sys/socket.h>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -223,11 +226,278 @@ struct session_state
 	float vibration[2] = {0, 0};
 	uint64_t dropped = 0; // frames dropped for want of a free stream slot
 
+	// XR_EXTX_overlay. An overlay app with no game running shows by itself; with one, its layers go over a socket
+	// to the game's process, which composites them over its frame (overlay_guest / overlay_hosts)
+	bool overlay = false;
+	int overlay_guest = -1; // overlay app: the link to the game drawing it
+	std::map<swapchain *, uint32_t> guest_chains; // overlay app: announced over that link
+	uint32_t guest_next_id = 1;
+	bool guest_warned_projection = false;
+	struct hosted_overlay
+	{
+		int link = -1;
+		std::map<uint32_t, std::unique_ptr<swapchain>> chains;
+		std::vector<ipc::link_layer> layers;
+	};
+	std::vector<hosted_overlay> overlay_hosts; // game: the overlays drawn into its frames
+
+	void end_guest_link()
+	{
+		close(overlay_guest);
+		overlay_guest = -1;
+		for (auto & [sc, id]: guest_chains)
+			for (size_t i = 0; comp && i < sc->images.size(); ++i)
+				comp->hand_over(*sc, i, false);
+		guest_chains.clear();
+		announced_rendering = false; // shows by itself again
+	}
+
+	void update_overlay_links()
+	{
+		bool host;
+		for (int link; client && (link = client->take_overlay_link(host)) >= 0;)
+			if (host)
+			{
+				overlay_hosts.emplace_back();
+				overlay_hosts.back().link = link;
+			}
+			else
+			{
+				if (overlay_guest >= 0)
+					end_guest_link();
+				overlay_guest = link;
+				report("overlay: drawn into the running game");
+			}
+		if (overlay_guest >= 0)
+		{
+			char b;
+			if (recv(overlay_guest, &b, 1, MSG_DONTWAIT) == 0)
+			{
+				end_guest_link();
+				report("overlay: the game has closed, showing by itself");
+			}
+		}
+	}
+
+	// overlay app: announce its images, hand the shown ones over, send the list
+	void forward_layers(const std::vector<composite_layer> & list)
+	{
+		ipc::link_layers out;
+		std::vector<swapchain *> shown;
+		for (const auto & l: list)
+		{
+			if (l.type != composite_layer::quad && l.type != composite_layer::cylinder)
+			{
+				if (!guest_warned_projection)
+					report("overlay: only quad and cylinder layers can be drawn over a game");
+				guest_warned_projection = true;
+				continue;
+			}
+			auto * sc = const_cast<swapchain *>(l.chain[0]);
+			if (!sc || sc->committed < 0 || sc->depth || out.count >= ipc::link_max_layers || sc->images.size() > ipc::link_max_images)
+				continue;
+			auto known = guest_chains.find(sc);
+			if (known == guest_chains.end())
+			{
+				ipc::link_swapchain d;
+				d.id = guest_next_id++;
+				d.format = int32_t(sc->format);
+				d.width = sc->width;
+				d.height = sc->height;
+				d.layers = sc->layers;
+				d.mips = sc->mips;
+				d.samples = sc->samples;
+				d.image_count = uint32_t(sc->images.size());
+				std::vector<int> fds;
+				for (size_t i = 0; i < sc->images.size(); ++i)
+					fds.push_back(comp->export_memory(*sc, i));
+				iovec iov{&d, sizeof(d)};
+				msghdr m{};
+				m.msg_iov = &iov;
+				m.msg_iovlen = 1;
+				std::vector<char> control(CMSG_SPACE(sizeof(int) * fds.size()));
+				m.msg_control = control.data();
+				m.msg_controllen = control.size();
+				cmsghdr * c = CMSG_FIRSTHDR(&m);
+				c->cmsg_level = SOL_SOCKET;
+				c->cmsg_type = SCM_RIGHTS;
+				c->cmsg_len = CMSG_LEN(sizeof(int) * fds.size());
+				std::memcpy(CMSG_DATA(c), fds.data(), sizeof(int) * fds.size());
+				const bool sent = sendmsg(overlay_guest, &m, MSG_DONTWAIT | MSG_NOSIGNAL) == ssize_t(sizeof(d));
+				for (int f: fds)
+					close(f);
+				if (!sent)
+					continue; // tried again next frame
+				known = guest_chains.emplace(sc, d.id).first;
+			}
+			ipc::link_layer & o = out.layer[out.count++];
+			o.chain = known->second;
+			o.image = sc->committed;
+			o.cylinder = l.type == composite_layer::cylinder;
+			o.head_locked = l.head_locked;
+			o.bottom_left = l.origin_bottom_left;
+			o.premultiplied = l.premultiplied;
+			o.opaque = l.opaque;
+			o.eye_mask = l.eye_mask;
+			o.alpha = l.alpha;
+			std::memcpy(o.array_index, l.array_index, sizeof(o.array_index));
+			std::memcpy(o.rect, l.rect, sizeof(o.rect));
+			math::quat q = l.quad_orientation;
+			math::vec3 p = l.quad_position;
+			if (!l.head_locked)
+				to_raw(q, p); // the game's tracking space is its own
+			std::memcpy(o.orientation, q.data(), sizeof(o.orientation));
+			std::memcpy(o.position, p.data(), sizeof(o.position));
+			std::memcpy(o.size, l.quad_size, sizeof(o.size));
+			o.radius = l.cylinder_radius;
+			o.angle = l.cylinder_angle;
+			o.aspect = l.cylinder_aspect;
+			if (std::find(shown.begin(), shown.end(), sc) == shown.end())
+				shown.push_back(sc);
+		}
+		for (swapchain * sc: shown)
+			comp->hand_over(*sc, size_t(sc->committed), true);
+		send(overlay_guest, &out, offsetof(ipc::link_layers, layer) + sizeof(ipc::link_layer) * out.count, MSG_DONTWAIT | MSG_NOSIGNAL);
+		// the image the app renders into next comes back (a static image never does: it is not rendered again)
+		for (swapchain * sc: shown)
+			if (sc->images.size() > 1)
+				comp->hand_over(*sc, (size_t(sc->committed) + 1) % sc->images.size(), false);
+	}
+
+	// game: what the overlays sent since the last frame; their layers go on top of the game's
+	void host_overlays(std::vector<composite_layer> & list)
+	{
+		for (size_t index = 0; index < overlay_hosts.size();)
+		{
+			auto & h = overlay_hosts[index];
+			bool alive = true;
+			for (int budget = 256; budget > 0; --budget)
+			{
+				alignas(8) uint8_t buf[sizeof(ipc::link_layers)];
+				iovec iov{buf, sizeof(buf)};
+				alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * ipc::link_max_images)];
+				msghdr m{};
+				m.msg_iov = &iov;
+				m.msg_iovlen = 1;
+				m.msg_control = control;
+				m.msg_controllen = sizeof(control);
+				const ssize_t n = recvmsg(h.link, &m, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+				if (n < 0)
+				{
+					alive = errno == EAGAIN || errno == EINTR;
+					break;
+				}
+				if (n < ssize_t(sizeof(ipc::link_msg)))
+				{
+					alive = false;
+					break;
+				}
+				std::vector<int> fds;
+				for (cmsghdr * c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c))
+					if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS)
+					{
+						fds.resize((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+						std::memcpy(fds.data(), CMSG_DATA(c), fds.size() * sizeof(int));
+					}
+				ipc::link_msg type;
+				std::memcpy(&type, buf, sizeof(type));
+				if (type == ipc::link_msg::swapchain && size_t(n) >= sizeof(ipc::link_swapchain))
+				{
+					ipc::link_swapchain d;
+					std::memcpy(&d, buf, sizeof(d));
+					try
+					{
+						h.chains[d.id] = comp->import_foreign(d, fds);
+					}
+					catch (const std::exception & e)
+					{
+						report("overlay: could not share its image: %s", e.what());
+					}
+				}
+				else
+				{
+					for (int f: fds)
+						close(f);
+					if (type == ipc::link_msg::destroy && size_t(n) >= sizeof(ipc::link_destroy))
+					{
+						ipc::link_destroy d;
+						std::memcpy(&d, buf, sizeof(d));
+						if (auto it = h.chains.find(d.id); it != h.chains.end())
+						{
+							comp->destroy_swapchain(*it->second);
+							h.chains.erase(it);
+						}
+					}
+					else if (type == ipc::link_msg::layers && size_t(n) >= offsetof(ipc::link_layers, layer))
+					{
+						ipc::link_layers d;
+						std::memcpy(&d, buf, size_t(n));
+						const uint32_t count = std::min<uint32_t>(d.count, uint32_t((size_t(n) - offsetof(ipc::link_layers, layer)) / sizeof(ipc::link_layer)));
+						h.layers.assign(d.layer, d.layer + std::min(count, ipc::link_max_layers));
+					}
+				}
+			}
+			if (!alive)
+			{
+				close(h.link);
+				for (auto & [id, sc]: h.chains)
+					comp->destroy_swapchain(*sc);
+				overlay_hosts.erase(overlay_hosts.begin() + std::ptrdiff_t(index));
+				continue;
+			}
+			for (const auto & o: h.layers)
+			{
+				auto it = h.chains.find(o.chain);
+				if (it == h.chains.end() || o.image < 0 || size_t(o.image) >= it->second->shared.size())
+					continue;
+				it->second->committed = o.image;
+				composite_layer l{};
+				l.type = o.cylinder ? composite_layer::cylinder : composite_layer::quad;
+				l.chain[0] = l.chain[1] = it->second.get();
+				std::memcpy(l.array_index, o.array_index, sizeof(l.array_index));
+				std::memcpy(l.rect, o.rect, sizeof(l.rect));
+				math::quat q{o.orientation[0], o.orientation[1], o.orientation[2], o.orientation[3]};
+				math::vec3 p{o.position[0], o.position[1], o.position[2]};
+				if (!o.head_locked)
+					to_app(q, p);
+				l.quad_orientation = q;
+				l.quad_position = p;
+				l.quad_size[0] = o.size[0];
+				l.quad_size[1] = o.size[1];
+				l.cylinder_radius = o.radius;
+				l.cylinder_angle = o.angle;
+				l.cylinder_aspect = o.aspect;
+				l.head_locked = o.head_locked;
+				l.origin_bottom_left = o.bottom_left;
+				l.premultiplied = o.premultiplied;
+				l.opaque = o.opaque;
+				l.alpha = o.alpha;
+				l.eye_mask = o.eye_mask;
+				list.push_back(l);
+			}
+			++index;
+		}
+	}
+
+	~session_state()
+	{
+		if (overlay_guest >= 0)
+			close(overlay_guest);
+		for (auto & h: overlay_hosts)
+		{
+			close(h.link);
+			for (auto & [id, sc]: h.chains)
+				if (comp)
+					comp->destroy_swapchain(*sc);
+		}
+	}
+
 	void refresh()
 	{
 		if (!client)
 			return;
 		client->poll(0);
+		update_overlay_links();
 		client->read_state(state);
 		state_time = now_seconds();
 		if (recenter_serial != state.settings.recenter_serial) {
@@ -255,6 +525,8 @@ struct session_state
 	// started facing backwards. Until a valid pose arrives the raw space is used and the first one centres.
 	bool recenter(bool keep_height)
 	{
+		if (overlay) // stays in the headset's own space: where games recentre to doesn't move its panels
+			return false;
 		frame_data::pose h = raw_head();
 		const auto & q = h.orientation;
 		const float norm = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
@@ -408,6 +680,25 @@ OVR_PUBLIC_FUNCTION(void) ovr_Destroy(ovrSession session)
 			od::ovr::report_client = nullptr;
 	}
 	delete S(session);
+}
+
+// libovr-opendesk extensions for XR_EXTX_overlay
+OVRVD_EXPORT void ovrvd_SetOverlay(ovrSession session)
+{
+	auto * s = S(session);
+	std::lock_guard lock(s->mutex);
+	s->overlay = true;
+	s->center = {};
+	s->center_yaw = 0;
+	s->centered = true;
+	s->client->declare_overlay();
+}
+
+OVRVD_EXPORT bool ovrvd_MainSessionVisible(ovrSession session)
+{
+	auto * s = S(session);
+	std::lock_guard lock(s->mutex);
+	return s->overlay_guest >= 0;
 }
 
 // libovr-opendesk extension: a runtime (OpenDesk XR) message for the streamer's log
@@ -828,6 +1119,8 @@ OVR_PUBLIC_FUNCTION(ovrBool) ovr_GetBool(ovrSession session, const char * key, o
 	if (!std::strcmp(key, "SupportsFullBodyTracking")) return !!(p.features & 0x200);
 	if (!std::strcmp(key, "EmulateTrackers")) return p.emulate_trackers;
 	if (!std::strcmp(key, "EmulateIndexControllers")) return p.emulate_index;
+	if (!std::strcmp(key, "HandPosePc")) return p.hand_pose == 1;
+	if (!std::strcmp(key, "HandPoseHeadset")) return p.hand_pose == 2;
 	return defaultVal;
 }
 OVR_PUBLIC_FUNCTION(ovrBool) ovr_SetBool(ovrSession, const char *, ovrBool) { return ovrFalse; }
@@ -1199,6 +1492,13 @@ OVR_PUBLIC_FUNCTION(void) ovr_DestroyTextureSwapChain(ovrSession session, ovrTex
 		return;
 	auto * s = S(session);
 	std::lock_guard lock(s->mutex);
+	if (auto known = s->guest_chains.find(c->images.get()); known != s->guest_chains.end())
+	{
+		ipc::link_destroy d;
+		d.id = known->second;
+		send(s->overlay_guest, &d, sizeof(d), MSG_DONTWAIT | MSG_NOSIGNAL);
+		s->guest_chains.erase(known);
+	}
 	if (s->comp)
 		s->comp->destroy_swapchain(*c->images);
 	delete c;
@@ -1217,22 +1517,11 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 	s->refresh();
 	if (!s->comp || !s->client->configured())
 		return ovrSuccess;
-	if (pid_t tid = gettid(); tid != s->render_tid)
+	if (pid_t tid = gettid(); tid != s->render_tid && !s->overlay)
 	{
 		s->render_tid = tid;
 		s->client->render_thread(tid);
 	}
-	if (!s->state.vr_active)
-		return ovrSuccess_NotVisible;
-	auto slot = s->client->acquire(100);
-	if (!slot)
-	{
-		// streamer busy: drop this frame (worth a line when it keeps happening)
-		if (s->dropped++ % 100 == 0)
-			report("no free stream slot for 100 ms: %llu frame(s) dropped so far", (unsigned long long)s->dropped);
-		return ovrSuccess;
-	}
-
 	std::vector<composite_layer> list;
 	bool have_pose = false;
 	vr_render_info info;
@@ -1332,8 +1621,13 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 		else if (h->Type == ovrLayerType_Cylinder) {
 			auto * q = reinterpret_cast<const ovrLayerCylinder *>(h);
 			auto * c = reinterpret_cast<texture_chain *>(q->ColorTexture);
-			if (!c || q->CylinderRadius <= 0 || q->CylinderAngle <= 0 || q->CylinderAspectRatio <= 0) continue;
-			l.type = composite_layer::cylinder; l.chain[0] = l.chain[1] = c->images.get();
+			const bool equirect = h->Reserved[8] == 1; // XR_KHR_composition_layer_equirect2 (radius 0: infinitely far)
+			if (!c || q->CylinderRadius < 0 || (q->CylinderRadius == 0 && !equirect) || q->CylinderAngle <= 0 || q->CylinderAspectRatio <= 0) continue;
+			l.type = equirect ? composite_layer::equirect : composite_layer::cylinder; l.chain[0] = l.chain[1] = c->images.get();
+			if (equirect) {
+				std::memcpy(&l.equirect_upper, &h->Reserved[9], sizeof(float));
+				std::memcpy(&l.equirect_lower, &h->Reserved[13], sizeof(float));
+			}
 			rect_of(*c->images, q->Viewport, l.rect[0]); std::memcpy(l.rect[1], l.rect[0], sizeof(l.rect[0]));
 			l.quad_orientation = {q->CylinderPoseCenter.Orientation.x,q->CylinderPoseCenter.Orientation.y,q->CylinderPoseCenter.Orientation.z,q->CylinderPoseCenter.Orientation.w};
 			l.quad_position = {q->CylinderPoseCenter.Position.x,q->CylinderPoseCenter.Position.y,q->CylinderPoseCenter.Position.z};
@@ -1353,6 +1647,37 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 			continue;
 		} else continue;
 		list.push_back(l);
+	}
+
+	if (!s->state.vr_active)
+		return ovrSuccess_NotVisible;
+	if (s->overlay_guest >= 0)
+	{
+		try
+		{
+			s->forward_layers(list);
+		}
+		catch (const std::exception & e)
+		{
+			return fail(ovrError_RuntimeException, e.what());
+		}
+		return ovrSuccess;
+	}
+	auto slot = s->client->acquire(100);
+	if (!slot)
+	{
+		// streamer busy: drop this frame (worth a line when it keeps happening)
+		if (s->dropped++ % 100 == 0)
+			report("no free stream slot for 100 ms: %llu frame(s) dropped so far", (unsigned long long)s->dropped);
+		return ovrSuccess;
+	}
+	try
+	{
+		s->host_overlays(list);
+	}
+	catch (const std::exception & e)
+	{
+		report("overlay: %s", e.what());
 	}
 
 	// frame pose: the projection layer's render pose, else the current head pose (quads only)

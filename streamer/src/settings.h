@@ -88,6 +88,7 @@ public:
 	bool useVirtualAudioDriver = true;
 	bool encryptLocalTraffic = false;
 	bool autoAdjustBitrate = true;
+	QStringList startupApps; // commands run while a VR game is open
 	bool autoUpdate = true; // AppImage: download new GitHub releases in the background
 	bool startWithLogin = false; // Windows defaults to true; off here so we never add autostart silently
 	bool startMinimizedInTray = false;
@@ -102,6 +103,7 @@ public:
 	double verticalFovTangent = 1.0;
 	double renderResolutionOverride = 1.0;
 	double foveaSize = 0.25;
+	int handPose = 0;            // controllers on Quest 3 / Pro: 0 automatic, 1 PC calibration, 2 the headset's own grip
 	double peripheryScale = 0.5; // foveated streaming: periphery resolution (fraction of the eye render size)
 	bool useSharpening = false;
 	double sharpening = 0.7;

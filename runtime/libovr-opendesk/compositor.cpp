@@ -532,7 +532,9 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 	sc->height = height;
 	sc->layers = std::max(array_size, 1u);
 	sc->samples = std::max(sample_count, 1u);
+	sc->mips = std::max(mip_levels, 1u);
 	sc->depth = depth;
+	sc->external.assign(image_count, 0);
 	for (uint32_t i = 0; i < image_count; ++i)
 	{
 		// color images are shared with the compositor's device: identical parameters on both sides
@@ -644,6 +646,105 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 	        },
 	        &ctx);
 	return sc;
+}
+
+std::unique_ptr<swapchain> compositor::import_foreign(const ipc::link_swapchain & d, const std::vector<int> & fds)
+{
+	auto sc = std::make_unique<swapchain>();
+	sc->foreign = true;
+	sc->format = VkFormat(d.format);
+	sc->width = d.width;
+	sc->height = d.height;
+	sc->layers = std::max(d.layers, 1u);
+	sc->samples = std::max(d.samples, 1u);
+	sc->mips = std::max(d.mips, 1u);
+	size_t taken = 0;
+	try
+	{
+		for (int fd: fds)
+		{
+			// exactly what create_swapchain made on the overlay's side
+			VkExternalMemoryImageCreateInfo ext{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+			ext.handleTypes = opaque_memory;
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &ext};
+			ici.imageType = VK_IMAGE_TYPE_2D;
+			ici.format = sc->format;
+			ici.extent = {sc->width, sc->height, 1};
+			ici.mipLevels = sc->mips;
+			ici.arrayLayers = sc->layers;
+			ici.samples = VkSampleCountFlagBits(sc->samples);
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			ici.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+			ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			VkImage image;
+			check(vkCreateImage(device, &ici, nullptr, &image), "vkCreateImage(overlay)");
+			sc->shared.push_back(image);
+			VkMemoryRequirements req;
+			vkGetImageMemoryRequirements(device, image, &req);
+			memory_import_info imp{memory_import_type};
+			imp.handleType = opaque_memory;
+			set_handle(imp, fd);
+			VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imp};
+			ded.image = image;
+			VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
+			mai.allocationSize = req.size;
+			mai.memoryTypeIndex = memory_type(memory_properties, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+			VkDeviceMemory memory;
+			check(vkAllocateMemory(device, &mai, nullptr, &memory), "vkAllocateMemory(import overlay)");
+			++taken; // (ownership of the fd moved)
+			sc->shared_memory.push_back(memory);
+			vkBindImageMemory(device, image, memory, 0);
+			std::vector<VkImageView> views;
+			for (uint32_t l = 0; l < sc->layers; ++l)
+			{
+				VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+				vci.image = image;
+				vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				vci.format = sc->format;
+				vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, l, 1};
+				VkImageView v;
+				check(vkCreateImageView(device, &vci, nullptr, &v), "vkCreateImageView(overlay)");
+				views.push_back(v);
+			}
+			sc->views.push_back(views);
+		}
+	}
+	catch (...)
+	{
+		for (size_t i = taken; i < fds.size(); ++i)
+			close(fds[i]);
+		destroy_swapchain(*sc);
+		throw;
+	}
+	return sc;
+}
+
+void compositor::hand_over(swapchain & sc, size_t image, bool to_game)
+{
+	if (image >= sc.images.size() || bool(sc.external[image]) == to_game)
+		return;
+	struct ctx_t
+	{
+		VkImage image;
+		uint32_t family;
+		bool to_game;
+	} ctx{sc.images[image], app_family, to_game};
+	app_submit(
+	        [](VkCommandBuffer c, void * p) {
+		        auto * x = static_cast<ctx_t *>(p);
+		        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+		        b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		        b.image = x->image;
+		        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+		        b.srcQueueFamilyIndex = x->to_game ? x->family : VK_QUEUE_FAMILY_EXTERNAL;
+		        b.dstQueueFamilyIndex = x->to_game ? VK_QUEUE_FAMILY_EXTERNAL : x->family;
+		        b.srcAccessMask = x->to_game ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : 0;
+		        b.dstAccessMask = x->to_game ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+		        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+	        },
+	        &ctx);
+	sc.external[image] = to_game;
 }
 
 int compositor::export_memory(const swapchain & sc, size_t index)
@@ -952,8 +1053,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 	// the wait covers), the compositor's device acquires them COLOR_ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL,
 	// and at the end everything goes back the same way
 	std::vector<VkImageMemoryBarrier> app_release, app_acquire, to_read, to_attachment;
-	// D3D11 mode: the shared textures come from and go back to D3D11 (queue family EXTERNAL, layout GENERAL)
-	const bool from_d3d = !app_vulkan();
 	for (const auto & l: layers)
 		for (int e = 0; e < 2; ++e)
 		{
@@ -965,19 +1064,19 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 				seen |= b.image == sc->shared[size_t(sc->committed)] && b.subresourceRange.baseArrayLayer == l.array_index[e];
 			if (seen)
 				continue;
-			if (from_d3d)
+			if (sc->foreign) // an overlay app's image: only ours to acquire and give back
 			{
 				VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
 				b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, l.array_index[e], 1};
 				b.image = sc->shared[size_t(sc->committed)];
-				b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+				b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 				b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 				b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
 				b.dstQueueFamilyIndex = family;
 				b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 				to_read.push_back(b);
 				b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+				b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 				b.srcQueueFamilyIndex = family;
 				b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
 				b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -1020,7 +1119,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 		vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
 		                     uint32_t(list->size()), list->data());
 	};
-	uint64_t app_done = 0; // D3D11 mode: the fence value after the app's frame
 	if (fs) // the compositor's submission waits for ready (the app's frame) on the GPU
 		app_queue_submit(fs->app_release, app_release, VK_NULL_HANDLE, fs->ready_app, VK_NULL_HANDLE);
 	else
@@ -1116,7 +1214,7 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 				continue;
 			push_constants pc{};
 			pc.effects[1] = state.settings.sharpening;
-			pc.info[0] = int(l.type) + 1;
+			pc.info[0] = l.type == composite_layer::equirect ? 6 : int(l.type) + 1; // (5 is the gamma pass)
 			pc.info[2] = l.cube_face;
 			pc.info[1] = (l.origin_bottom_left ? 1 : 0) | (first ? 2 : 0) | (l.premultiplied ? 4 : 0) | (l.opaque ? 8 : 0);
 			// layer alpha in bits 8-15 as transparency (0: fully opaque, the default)
@@ -1153,6 +1251,10 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 				if (l.type == composite_layer::cylinder) {
 					pc.a[0] = l.cylinder_radius; pc.a[1] = l.cylinder_angle;
 					pc.a[2] = l.cylinder_radius * l.cylinder_angle / l.cylinder_aspect;
+				}
+				if (l.type == composite_layer::equirect) {
+					pc.a[0] = l.cylinder_radius; pc.a[1] = l.cylinder_angle;
+					pc.a[2] = l.equirect_upper; pc.a[3] = l.equirect_lower;
 				}
 			}
 			if (first && l.type != composite_layer::projection)

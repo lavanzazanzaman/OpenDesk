@@ -1688,8 +1688,8 @@ namespace opendesk_openxr {
                 // gripSpace in targetRaySpace, both hands); Touch Plus has the same relation. The headset streams the
                 // aim pose, so grip (and palm, which follows grip) come from aim with the headset's own relation -
                 // what OpenXR / OpenVR games see on the headset or through WiVRn. Quest 1/2 keep the calibration.
-                if (startsWith(m_cachedHmdInfo.ProductName, "Meta Quest 3") ||
-                    startsWith(m_cachedHmdInfo.ProductName, "Meta Quest Pro")) {
+                if (m_useHeadsetGripPose && (startsWith(m_cachedHmdInfo.ProductName, "Meta Quest 3") ||
+                    startsWith(m_cachedHmdInfo.ProductName, "Meta Quest Pro"))) {
                     // left hand; the right hand is mirrored below like all controller poses here
                     const XrPosef questGripInAim{{0.382319f, 0.040299f, -0.016692f, 0.923000f},
                                                  {-0.007328f, -0.015858f, 0.019500f}};

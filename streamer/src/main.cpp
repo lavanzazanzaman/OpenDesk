@@ -5,6 +5,8 @@
 
 #include <QApplication>
 #include <QFile>
+#include "startup_apps.h"
+
 #include <QLockFile>
 #include <QStandardPaths>
 #include <QTimer>
@@ -151,6 +153,7 @@ int main(int argc, char ** argv)
 		return window.screenshotTabs(QApplication::arguments()[i + 1]) ? 0 : 1;
 	QObject::connect(&app, &QApplication::aboutToQuit, &engine, &Engine::stop);
 
+	StartupApps startupApps(engine);
 	engine.start();
 	// test hook: quit like the tray's Exit after N seconds
 	bool quitAfterSet = false;

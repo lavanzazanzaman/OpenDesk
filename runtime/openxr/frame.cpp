@@ -43,10 +43,11 @@ namespace opendesk_openxr {
 
     namespace {
         // libovr-opendesk alpha modes (ovrLayerHeader::Reserved[2]): bit 0 opaque, bit 1 unpremultiplied alpha.
-        // The bottom layer and layers without XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT are opaque.
-        int linuxAlphaMode(uint32_t layerIndex, XrCompositionLayerFlags flags) {
+        // The bottom layer and layers without XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT are opaque. Not so
+        // an overlay app's bottom layer: it goes on top of the game.
+        int linuxAlphaMode(uint32_t layerIndex, XrCompositionLayerFlags flags, bool overlay) {
             int mode = 0;
-            if (layerIndex == 0 || !(flags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)) {
+            if ((layerIndex == 0 && !overlay) || !(flags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)) {
                 mode |= 1;
             }
             if (flags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT) {
@@ -459,6 +460,25 @@ namespace opendesk_openxr {
                         return result;
                     }
 
+                } else if (has_XR_KHR_composition_layer_equirect2 &&
+                           frameEndInfo->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR) {
+                    // For libovr-opendesk's compositor: a cylinder layer marked in Header.Reserved[8], with the vertical
+                    // angles in Reserved[9..16].
+                    const auto* equirect = reinterpret_cast<const XrCompositionLayerEquirect2KHR*>(frameEndInfo->layers[i]);
+                    const XrResult result = handleQuadCylinderLayer(
+                        *reinterpret_cast<const XrCompositionLayerQuad*>(equirect),
+                        *reinterpret_cast<const XrCompositionLayerCylinderKHR*>(equirect),
+                        layer);
+                    if (XR_FAILED(result)) {
+                        return result;
+                    }
+                    layer.Cylinder.CylinderRadius = equirect->radius;
+                    layer.Cylinder.CylinderAngle = equirect->centralHorizontalAngle;
+                    layer.Cylinder.CylinderAspectRatio = 1.f;
+                    layer.Header.Reserved[8] = 1;
+                    std::memcpy(&layer.Header.Reserved[9], &equirect->upperVerticalAngle, sizeof(float));
+                    std::memcpy(&layer.Header.Reserved[13], &equirect->lowerVerticalAngle, sizeof(float));
+
                 } else if (has_XR_KHR_composition_layer_cube &&
                            frameEndInfo->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_CUBE_KHR) {
                     const XrCompositionLayerCubeKHR* cube =
@@ -654,7 +674,7 @@ namespace opendesk_openxr {
                 xrSwapchain.resolvedSlices[proj.views[viewIndex].subImage.imageArrayIndex].ovrSwapchain;
             // libovr-opendesk: array slice per eye + alpha mode (see linux_graphics.cpp)
             layer.EyeFov.Header.Reserved[viewIndex] = (char)proj.views[viewIndex].subImage.imageArrayIndex;
-            layer.EyeFov.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, proj.layerFlags);
+            layer.EyeFov.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, proj.layerFlags, m_isOverlaySession);
 
             if (!isValidSwapchainRect(xrSwapchain.ovrDesc, proj.views[viewIndex].subImage.imageRect)) {
                 return XR_ERROR_SWAPCHAIN_RECT_INVALID;
@@ -772,7 +792,9 @@ namespace opendesk_openxr {
     XrResult OpenXrRuntime::handleQuadCylinderLayer(const XrCompositionLayerQuad& quad,
                                                     const XrCompositionLayerCylinderKHR& cylinder,
                                                     ovrLayer_Union& layer) {
-        const bool isCylinder = quad.type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR;
+        // (an equirect layer starts like a cylinder layer; xrEndFrame fills in its angles)
+        const bool isCylinder = quad.type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR ||
+                                quad.type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR;
 
         // Make sure that we can use the XrCompositionLayerQuad part of XrCompositionLayerCylinderKHR
         // equivalently.
@@ -856,7 +878,7 @@ namespace opendesk_openxr {
         resolveSwapchainImage(xrSwapchain, quad.subImage.imageArrayIndex, m_precompositor.resolvedSwapchainImages);
         layer.Quad.ColorTexture = xrSwapchain.resolvedSlices[quad.subImage.imageArrayIndex].ovrSwapchain;
         layer.Quad.Header.Reserved[0] = layer.Quad.Header.Reserved[1] = (char)quad.subImage.imageArrayIndex;
-        layer.Quad.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, quad.layerFlags);
+        layer.Quad.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, quad.layerFlags, m_isOverlaySession);
 
         if (!isValidSwapchainRect(xrSwapchain.ovrDesc, quad.subImage.imageRect)) {
             return XR_ERROR_SWAPCHAIN_RECT_INVALID;

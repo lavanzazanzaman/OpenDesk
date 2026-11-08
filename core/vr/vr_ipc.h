@@ -18,7 +18,7 @@
 
 namespace od::ipc
 {
-constexpr uint32_t protocol_version = 15;
+constexpr uint32_t protocol_version = 17;
 constexpr size_t frame_data_size = 4992; // Upstream.Mobile.FrameData
 constexpr size_t skeleton_joint_bytes = 36, skeleton_max_joints = 84; // SkeletonDataChanged: joint, parent, pose
 constexpr uint32_t max_slots = 4;
@@ -45,7 +45,9 @@ enum class msg : uint32_t
 	recenter = 6, // client -> server
 	rendering = 7, // client -> server: the app submits frames (sent once, also while the headset isn't in VR yet)
 	log = 8,       // client -> server: a runtime message for the streamer's log
-	render_thread = 9 // client -> server: the thread that submits frames ("Boost game priority")
+	render_thread = 9, // client -> server: the thread that submits frames ("Boost game priority")
+	overlay = 10,      // client -> server: this app's session is an overlay (XR_EXTX_overlay)
+	overlay_link = 11  // server -> client (+ fd): a socket between an overlay and the game drawing it
 };
 
 struct hello_msg
@@ -105,6 +107,7 @@ struct render_settings
 	// hard edge like the Windows streamer, softened only by the headset's thin blend ring)
 	uint32_t soft_fovea_edge = 0;
 	uint32_t features = 0, emulate_trackers = 0, emulate_index = 0;
+	uint32_t hand_pose = 0; // controllers on Quest 3 / Pro: 0 automatic, 1 PC calibration, 2 the headset's own grip
 	float boundary_width = 0, boundary_height = 0;
 	uint32_t recenter_serial = 0;
 	// Synchronous Spacewarp (the headset's SharedMobileSettings.UseSpacewarp, Automatic or Always): the app renders every
@@ -158,6 +161,64 @@ struct render_thread_msg
 {
 	msg type = msg::render_thread;
 	int32_t tid = 0; // gettid() in the app's PID namespace (Steam's container may have its own)
+};
+
+struct overlay_msg
+{
+	msg type = msg::overlay;
+};
+
+struct overlay_link_msg
+{
+	msg type = msg::overlay_link;
+	uint32_t host = 0; // 1: you are the game, draw what arrives; 0: you are the overlay, send your layers
+};
+
+// Overlay <-> game, on the overlay_link socket (SOCK_SEQPACKET). The game composites the overlay's layers over its own
+// frame with the latest head pose, so panels stay put however slowly the overlay renders. Images are shared as Vulkan
+// OPAQUE_FD memory (same GPU, same driver, identical image parameters); poses are in the headset's raw tracking space.
+enum class link_msg : uint32_t
+{
+	swapchain = 1,     // overlay -> game (+ image_count fds)
+	destroy = 2,       // overlay -> game
+	layers = 3,        // overlay -> game: replaces the previous list
+};
+
+constexpr uint32_t link_max_images = 3, link_max_layers = 32;
+
+struct link_swapchain
+{
+	link_msg type = link_msg::swapchain;
+	uint32_t id = 0;
+	int32_t format = 0; // VkFormat
+	uint32_t width = 0, height = 0, layers = 1, mips = 1, samples = 1, image_count = 0;
+};
+
+struct link_destroy
+{
+	link_msg type = link_msg::destroy;
+	uint32_t id = 0;
+};
+
+struct link_layer
+{
+	uint32_t chain = 0;
+	int32_t image = 0;
+	uint32_t cylinder = 0; // 0: quad
+	uint32_t head_locked = 0, bottom_left = 0, premultiplied = 1, opaque = 0, eye_mask = 3;
+	uint32_t array_index[2] = {};
+	float rect[2][4] = {};
+	float orientation[4] = {0, 0, 0, 1};
+	float position[3] = {};
+	float size[2] = {1, 1};
+	float radius = 1, angle = 1, aspect = 1, alpha = 1;
+};
+
+struct link_layers
+{
+	link_msg type = link_msg::layers;
+	uint32_t count = 0;
+	link_layer layer[link_max_layers];
 };
 
 struct shared_state

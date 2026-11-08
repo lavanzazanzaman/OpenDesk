@@ -117,6 +117,7 @@ void StreamerSettings::resetVR()
 	verticalFovTangent = 1.0;
 	renderResolutionOverride = 1.0;
 	foveaSize = 0.25;
+	handPose = 0;
 	peripheryScale = 0.5;
 	useSharpening = false;
 	sharpening = 0.7;
@@ -139,6 +140,7 @@ void StreamerSettings::resetAudioInput()
 
 void StreamerSettings::resetGeneral()
 {
+	startupApps.clear();
 	autoUpdate = true;
 	startWithLogin = false;
 	startMinimizedInTray = false;
@@ -206,6 +208,8 @@ void StreamerSettings::load()
 	d("RenderResolutionOverride", renderResolutionOverride);
 	d("FoveaSize", foveaSize);
 	foveaSize = std::clamp(foveaSize, 0.15, 0.5); // Windows: 15-35% (default 25%); up to 50% here
+	if (o.contains("HandPose"))
+		handPose = std::clamp(o["HandPose"].toInt(), 0, 2);
 	d("PeripheryScale", peripheryScale);
 	b("UseSharpening", useSharpening);
 	d("Sharpening", sharpening);
@@ -219,6 +223,12 @@ void StreamerSettings::load()
 		reportedStreamerVersion = "1.20.3";
 	s("ScreenshotsRootPath", screenshotsRootPath);
 	s("VideosRootPath", videosRootPath);
+	if (o.contains("StartupApps"))
+	{
+		startupApps.clear();
+		for (const auto & v: o["StartupApps"].toArray())
+			startupApps << v.toString();
+	}
 	if (o.contains("VideoFolders"))
 	{
 		videoFolders.clear();
@@ -266,6 +276,7 @@ void StreamerSettings::save()
 	o["VerticalFovTangent"] = verticalFovTangent;
 	o["RenderResolutionOverride"] = renderResolutionOverride;
 	o["FoveaSize"] = foveaSize;
+	o["HandPose"] = handPose;
 	o["PeripheryScale"] = peripheryScale;
 	o["UseSharpening"] = useSharpening;
 	o["Sharpening"] = sharpening;
@@ -279,6 +290,7 @@ void StreamerSettings::save()
 	o["ScreenshotsRootPath"] = screenshotsRootPath;
 	o["VideosRootPath"] = videosRootPath;
 	o["VideoFolders"] = QJsonArray::fromStringList(videoFolders);
+	o["StartupApps"] = QJsonArray::fromStringList(startupApps);
 	QJsonObject bind;
 	for (auto it = bindings.begin(); it != bindings.end(); ++it)
 		bind[it.key()] = it.value();

@@ -63,10 +63,10 @@ if [ -n "${OPENDESK_TEST_XRIZER_ZIP:-}" ]; then
 	printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { cp "%s" "$2"; exit 0; }; shift; done\nexit 1\n' "$OPENDESK_TEST_XRIZER_ZIP" > $W/bin/curl
 	chmod +x $W/bin/curl
 fi
-FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
+FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR|XROVERLAY|XROVERLAYFIRST|XROVERLAYALONE) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
- "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_TWO_PASS:+, \"Enable2Pass\": true}${OPENDESK_TEST_AMD_SPEED:+, \"AmdEncoderSpeed\": $OPENDESK_TEST_AMD_SPEED}${OPENDESK_TEST_QPA:+, \"StartMinimized\": false, \"StartMinimizedInTray\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
+ "VideosRootPath": "$W/videos"${OPENDESK_TEST_HAND_POSE:+, \"HandPose\": $OPENDESK_TEST_HAND_POSE}${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_TWO_PASS:+, \"Enable2Pass\": true}${OPENDESK_TEST_AMD_SPEED:+, \"AmdEncoderSpeed\": $OPENDESK_TEST_AMD_SPEED}${OPENDESK_TEST_QPA:+, \"StartMinimized\": false, \"StartMinimizedInTray\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
 J
 rm -f $W/config/OpenDesk/engine.json
 # the streamer's screenshots (ScreenshotToDesktop) go to $XDG_CONFIG_HOME/user-dirs.dirs' pictures folder, not ~/Pictures
@@ -133,7 +133,7 @@ fi
 [ "$SCENARIO" = OVRAPP ] && (OPENDESK_OVR_LOG=1 $R/build/runtime/ovr-test-app 30 > $W/client.out 2>&1 &)
 [ "$SCENARIO" = XRMASK ] && (sleep 4; $R/build/runtime/xr-mask-test ${OPENDESK_TEST_NO_STENCIL:+off} > $W/client.out 2>&1) & [ "$SCENARIO" = XRMASK ] && C=\$!
 [ "$SCENARIO" = XRBODY ] && (sleep 4; $R/build/runtime/xr-body-test > $W/client.out 2>&1) & [ "$SCENARIO" = XRBODY ] && C=\$!
-[ "$SCENARIO" = XRPOSE ] && (sleep 4; $R/build/runtime/xr-pose-probe 6 > $W/client.out 2>&1) & [ "$SCENARIO" = XRPOSE ] && C=\$!
+[ "$SCENARIO" = XRPOSE ] && (sleep 4; bash -c "exec -a ${XRPOSE_ARGV0:-xr-pose-probe} $R/build/runtime/xr-pose-probe 6" > $W/client.out 2>&1) & [ "$SCENARIO" = XRPOSE ] && C=\$!
 [ "$SCENARIO" = XREXIT ] && ($R/build/runtime/xr-exit-test > $W/client.out 2>&1; $R/build/runtime/xr-exit-test headless >> $W/client.out 2>&1 &)
 # HELLOXR_HIDE_RUNTIME_DIR=1: the app gets another $XDG_RUNTIME_DIR (like Steam's pressure-vessel) -> abstract socket
 [ -n "$HELLOXR_HIDE_RUNTIME_DIR" ] && APP_ENV="XDG_RUNTIME_DIR=$RT/app" && mkdir -p $RT/app
@@ -146,6 +146,12 @@ fi
 [ "$SCENARIO" = HELLOXR ] && (sleep 25 | env \$APP_ENV OPENDESK_OVR_LOG=1 timeout 25 hello_xr -g ${HELLOXR_GFX:-Vulkan2} -vc Stereo > $W/client.out 2>&1 &)
 # FOVEATED: an eye-tracked headset streaming foveated (4 streams, gaze on the video connection) while hello_xr renders
 [ "$SCENARIO" = FOVEATED ] && (sleep 30 | timeout 30 hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &)
+# XROVERLAY: an XR_EXTX_overlay app joins a running game / XROVERLAYFIRST: it runs first and the game takes over /
+# XROVERLAYALONE: it is the only app. WAYVR=<executable>: the real WayVR instead of the test app
+OVERLAY="${WAYVR:-$R/build/runtime/xr-overlay-test 60 ${OVERLAY_ALPHA:-1}}"
+[ "$SCENARIO" = XROVERLAY ] && (sleep ${OVERLAY_GAME_SECONDS:-30} | timeout ${OVERLAY_GAME_SECONDS:-30} hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &) && (sleep 5; timeout $((${OVERLAY_GAME_SECONDS:-30} - 8)) \$OVERLAY > $W/overlay.out 2>&1 &)
+[ "$SCENARIO" = XROVERLAYFIRST ] && (timeout 32 \$OVERLAY > $W/overlay.out 2>&1 &) && (sleep 6; sleep ${OVERLAY_GAME_SECONDS:-24} | timeout ${OVERLAY_GAME_SECONDS:-24} hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &)
+[ "$SCENARIO" = XROVERLAYALONE ] && (timeout 24 \$OVERLAY > $W/overlay.out 2>&1 &)
 # REJOIN: hello_xr keeps running while the headset disconnects and reconnects (upstream app closed / crashed and reopened)
 [ "$SCENARIO" = REJOIN ] && (sleep 30 | timeout 30 hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &)
 env NOAUDIO=1 HOLD=1 VR_DUMP=$W/vr VR_DUMP_FOVEA=$W/fovea.txt $FAKE=1 ${@:3} $R/engine/.venv/bin/python $R/core/tests/fake_headset.py testacct > >(tee $W/fake.out)
@@ -195,6 +201,11 @@ if [ "$SCENARIO" = FOVEATED ]; then
 	[ ! -e $W/share/vulkan/implicit_layer.d/VkLayer_vd_foveated.json ] && [ ! -e $W/share/opendesk/vulkan ] &&
 		echo "PASS  old foveated rendering layer install removed" || { echo "FAIL  old foveated rendering layer files left behind"; rc=1; }
 fi
+case "$SCENARIO" in XROVERLAY|XROVERLAYFIRST|XROVERLAYALONE)
+	cat $W/overlay.out
+	for f in $W/vr-*.bin; do echo "$(basename $f): $(python3 -I $R/core/tests/overlay_check.py $f)"; done
+	;;
+esac
 if [ "$SCENARIO" = XRMASK ]; then
 	grep -E "PASS|FAIL" $W/client.out
 	grep -q "ALL PASS" $W/client.out || { echo "FAIL  FOV stencil"; rc=1; }

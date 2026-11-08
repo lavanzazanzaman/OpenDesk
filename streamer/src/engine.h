@@ -37,6 +37,7 @@ public:
 	void sendAccounts(const QStringList & accounts);
 	void applyOptions();
 	void applyGpuSelection(); // live: codec / audio / VR test mode, no reconnect
+	void note(const QString & text); // a line in the streamer log
 	void headsetAction(const QString & action); // BINDINGS -> headset
 
 	Status status() const { return status_; }
@@ -57,6 +58,7 @@ signals:
 	void statusChanged(Engine::Status);
 	void pairingRequest(QString account, int platform, QString host);
 	void headsetChanged();
+	void vrGameChanged(bool running); // a VR game started / has closed (overlay apps like WayVR don't count)
 	void videoChanged();
 	void encodeStatsChanged();
 	void captureError(QString message);

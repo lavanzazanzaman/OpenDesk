@@ -96,6 +96,18 @@ bool layer_uv(vec2 pos, out vec2 uv, out float alpha_scale)
 			}
 			if (face != pc.info.z) return false;
 			uv = q / major * 0.5 + 0.5;
+		} else if (pc.info.x == 6) { // equirect: a sphere around the layer's origin (radius 0: infinitely far)
+			vec3 hit = d;
+			if (pc.a.x > 0.0) {
+				float a = dot(d,d), b = dot(o,d), c = dot(o,o)-pc.a.x*pc.a.x;
+				float discriminant = b*b-a*c;
+				if (a < 1e-8 || discriminant < 0.0) return false;
+				float k = (-b+sqrt(discriminant))/a;
+				if (k <= 0.0) return false;
+				hit = o+k*d;
+			}
+			float latitude = asin(clamp(hit.y/length(hit), -1.0, 1.0));
+			uv = vec2(atan(hit.x,-hit.z)/pc.a.y+0.5, (pc.a.z-latitude)/(pc.a.z-pc.a.w));
 		} else if (pc.info.x == 3) {
 			float a = dot(d.xz,d.xz), b = dot(o.xz,d.xz), c = dot(o.xz,o.xz)-pc.a.x*pc.a.x;
 			float discriminant = b*b-a*c;

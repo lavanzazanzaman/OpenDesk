@@ -40,6 +40,7 @@ public:
 		std::function<void(std::string)> log;                       // server thread
 		std::function<void(bool connected, std::string app)> client; // server thread
 		std::function<void()> first_frame;                          // server thread: the connected app renders
+		std::function<void(bool running)> game;                     // server thread: a VR game (not an overlay app) renders / has gone
 		std::function<void(const ipc::haptics_msg &)> haptics;      // server thread
 		std::function<void()> recenter;                             // server thread
 		std::function<void(int pid, int tid)> render_thread;        // server thread: the app's frame-submitting thread (host ids)
@@ -95,8 +96,9 @@ private:
 	int abstract_fd = -1; // same service for containerized apps (ipc::abstract_name)
 	int memfd = -1;
 	int wake_pipe[2] = {-1, -1};
-	struct peer { std::string app; int pid = 0; std::vector<image_ptr> pool; int log_lines = 0; uint64_t serial = 0; };
+	struct peer { std::string app; int pid = 0; std::vector<image_ptr> pool; int log_lines = 0; uint64_t serial = 0; bool overlay = false, rendering = false; uint64_t linked_host = 0; };
 	uint64_t next_peer_serial = 0;
+	bool game_running = false;
 	// slots the sink finished with, released to their app from the server thread (wake_pipe 'r')
 	struct release_queue
 	{

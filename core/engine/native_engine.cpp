@@ -430,6 +430,8 @@ void native_engine::set_options(QJsonObject o)
 			QMetaObject::invokeMethod(this, [this] { update_vr_server(); if (current) update_video(true); }, Qt::QueuedConnection);
 		}
 	}
+	if (o.contains("hand_pose"))
+		options.render.hand_pose = uint32_t(std::clamp(o["hand_pose"].toInt(), 0, 2));
 	if (o.contains("periphery_scale"))
 		options.periphery_scale = std::clamp(o["periphery_scale"].toDouble(0.5), 0.3, 0.5);
 	if (o.contains("fovea_size"))
@@ -1392,6 +1394,9 @@ void native_engine::update_vr_server()
 					});
 					update_vr_server();
 				});
+			};
+			cb.game = [this](bool running) {
+				QMetaObject::invokeMethod(this, [this, running] { emit_event("vr_game", {{"running", running}}); }, Qt::QueuedConnection);
 			};
 			cb.first_frame = [this] {
 				QMetaObject::invokeMethod(this, [this] {

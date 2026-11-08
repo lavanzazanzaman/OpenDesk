@@ -47,6 +47,9 @@ public:
 	void render_thread(int tid); // the thread submitting frames, for "Boost game priority"
 	void log(const std::string & text); // into the streamer's log
 	void announce_rendering(); // the app renders: the streamer may switch the headset to VR
+	void declare_overlay();    // this app's session is an overlay
+	// a link to an overlay / the game drawing this overlay, from the streamer; -1: none waiting. The caller owns the fd.
+	int take_overlay_link(bool & host);
 
 private:
 	vr_client() = default;
@@ -55,6 +58,7 @@ private:
 	ipc::config_msg config_{};
 	std::vector<image> images;
 	std::vector<bool> busy;
+	std::vector<std::pair<int, bool>> overlay_links; // fd, host
 	const ipc::shared_state * state = nullptr;
 	size_t state_size = 0;
 };

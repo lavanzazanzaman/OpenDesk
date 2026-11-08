@@ -35,6 +35,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <memory>
 #include <QFileInfo>
 #include <QVBoxLayout>
 
@@ -818,6 +819,12 @@ QWidget * makeVRPage(Engine & engine)
 	toggleRow(fov, "Soft fovea edge", "Blend the sharp area into the periphery gradually", s.softFoveaEdge, apply,
 	          "Off: a hard edge between the sharp area and the periphery. Takes effect right away");
 
+	auto * hands = card(p, "Controllers");
+	row(hands, "Hand angle", "If your hands look tilted in a game, try another option",
+	    combo<int>(170, {{0, "Automatic"}, {1, "PC calibration"}, {2, "Headset grip"}}, s.handPose, apply),
+	    "Quest 3, 3S and Pro controllers. Most games were made for the PC calibration; a few line up with the headset's own\n"
+	    "grip. Automatic picks per game. Applies the next time a game starts.");
+
 	auto * perf = card(p, "Performance");
 	toggleRow(perf, "Boost game priority", "Only if games freeze or stutter", s.boostGamePriority, apply,
 	          "Raises the CPU priority of the game's render thread (through rtkit). Takes effect right away");
@@ -908,6 +915,82 @@ QWidget * makeGeneralPage(Engine & engine)
 	});
 	showState();
 	statusRow->setEnabled(canUpdate);
+
+	auto * apps = card(p, "Startup apps");
+	auto * appsNote = new QLabel("Started when a VR game opens and closed when it closes. Overlay apps like WayVR show on top of the game.");
+	appsNote->setObjectName("settingDescription");
+	appsNote->setWordWrap(true);
+	apps->addWidget(appsNote);
+	auto * appsHost = new QWidget;
+	auto * appsList = new QVBoxLayout(appsHost);
+	appsList->setContentsMargins(0, 8, 0, 8);
+	appsList->setSpacing(6);
+	apps->addWidget(appsHost);
+	auto * addApp = new QPushButton("Add app");
+	addApp->setFixedWidth(120);
+	apps->addWidget(addApp, 0, Qt::AlignLeft);
+	apps->addSpacing(8);
+	auto shown = std::make_shared<QStringList>();
+	auto rebuildApps = std::make_shared<std::function<void()>>();
+	*rebuildApps = [appsHost, appsList, shown, weak = std::weak_ptr(rebuildApps)] {
+		auto & st = StreamerSettings::instance();
+		if (appsList->count() == st.startupApps.size() && *shown == st.startupApps)
+			return;
+		*shown = st.startupApps;
+		while (auto * item = appsList->takeAt(0))
+		{
+			item->widget()->hide();
+			item->widget()->deleteLater();
+			delete item;
+		}
+		for (int i = 0; i < st.startupApps.size(); ++i)
+		{
+			auto * line = new QWidget(appsHost);
+			auto * h = new QHBoxLayout(line);
+			h->setContentsMargins(0, 0, 0, 0);
+			h->setSpacing(6);
+			auto * command = new QLineEdit(st.startupApps[i]);
+			command->setPlaceholderText("Command, for example: my-vr-tool --flag");
+			auto * browse = new QPushButton("Browse");
+			auto * remove = new QPushButton("Remove");
+			h->addWidget(command, 1);
+			h->addWidget(browse);
+			h->addWidget(remove);
+			appsList->addWidget(line);
+			QObject::connect(command, &QLineEdit::editingFinished, command, [command, i, shown] {
+				auto & s2 = StreamerSettings::instance();
+				if (i < s2.startupApps.size() && s2.startupApps[i] != command->text())
+				{
+					s2.startupApps[i] = command->text();
+					*shown = s2.startupApps;
+					s2.save();
+				}
+			});
+			QObject::connect(browse, &QPushButton::clicked, command, [command] {
+				const QString file = QFileDialog::getOpenFileName(command, "Choose an app", QDir::homePath());
+				if (file.isEmpty())
+					return;
+				command->setText(file.contains(' ') ? '"' + file + '"' : file);
+				emit command->editingFinished();
+			});
+			QObject::connect(remove, &QPushButton::clicked, appsHost, [i, weak] {
+				auto & s2 = StreamerSettings::instance();
+				if (i < s2.startupApps.size())
+					s2.startupApps.removeAt(i);
+				s2.save();
+				if (auto f = weak.lock())
+					(*f)();
+			});
+		}
+	};
+	QObject::connect(addApp, &QPushButton::clicked, addApp, [rebuildApps] {
+		auto & s2 = StreamerSettings::instance();
+		s2.startupApps << QString();
+		s2.save();
+		(*rebuildApps)();
+	});
+	QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, appsHost, [rebuildApps] { (*rebuildApps)(); });
+	(*rebuildApps)();
 
 	auto * security = card(p, "Security");
 	toggleRow(security, "Ask for computer access", "Prompt when a new headset searches for computers", s.showPairingRequests);

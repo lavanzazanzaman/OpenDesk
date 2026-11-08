@@ -9,6 +9,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QDir>
+#include <QTime>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -100,6 +101,7 @@ QJsonObject Engine::optionsJson() const
 	        {"amd_preset", s.amdEncoderSpeed},
 	        {"gpu_selection", s.effectiveGameGpu().isEmpty() ? QString() : s.effectiveGameGpu() + "/" + s.effectiveStreamingGpu()},
 	        {"fovea_size", s.foveaSize},
+	        {"hand_pose", s.handPose},
 	        {"periphery_scale", s.peripheryScale},
 	        {"audio_mode", int(s.audioStreaming)},
 	        {"gamepad_emulation", int(s.gamepadEmulation)},
@@ -259,6 +261,8 @@ void Engine::handle(const QJsonObject & ev)
 	}
 	else if (type == "pairing_request")
 		emit pairingRequest(ev["account"].toString(), ev["platform"].toInt(), ev["host"].toString());
+	else if (type == "vr_game")
+		emit vrGameChanged(ev["running"].toBool());
 	else if (type == "connected")
 	{
 		connectedViaUsb = ev["usb"].toBool();
@@ -307,6 +311,12 @@ void Engine::handle(const QJsonObject & ev)
 		emit captureError(captureErrorMessage);
 		emit videoChanged();
 	}
+}
+
+void Engine::note(const QString & text)
+{
+	log_.write((QTime::currentTime().toString("HH:mm:ss") + " INFO " + text + "\n").toUtf8());
+	log_.flush();
 }
 
 void Engine::setStatus(Status s)

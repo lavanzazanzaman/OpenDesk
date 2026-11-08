@@ -607,6 +607,7 @@ namespace opendesk_openxr {
         bool m_supportsFullBodyTracking{false};
         bool m_emulateViveTrackers{false};
         bool m_emulateIndexControllers{false};
+        bool m_useHeadsetGripPose{false}; // Quest 3 / Pro: the headset's own grip instead of the PC calibration
         bool m_isTrackerDisabled[std::size(TrackerRoles)]{};
         bool m_isOculusXrPlugin{false};
         bool m_isConformanceTest{false};
@@ -618,6 +619,8 @@ namespace opendesk_openxr {
 
         // Session state.
         bool m_isHeadless{false};
+        bool m_isOverlaySession{false}; // XR_EXTX_overlay
+        bool m_mainSessionVisible{false};
         bool m_syncGpuWorkInEndFrame{false};
         bool m_sessionCreated{false};
         XrSessionState m_sessionState{XR_SESSION_STATE_UNKNOWN};

@@ -11,6 +11,7 @@ qt_add_executable(opendesk-streamer
     src/setup.cpp src/setup.h
     src/shortcuts.cpp src/shortcuts.h
     src/updater.cpp src/updater.h
+    src/startup_apps.cpp src/startup_apps.h
 )
 
 qt_add_resources(opendesk-streamer "theme" PREFIX "/" FILES theme/violet.qss theme/check.svg theme/arrow.svg theme/switch-on.svg theme/switch-off.svg theme/switch-off-disabled.svg)

@@ -31,8 +31,10 @@ struct swapchain
 {
 	VkFormat format = VK_FORMAT_UNDEFINED;
 	uint32_t width = 0, height = 0, layers = 1;
-	uint32_t samples = 1;
+	uint32_t samples = 1, mips = 1;
 	bool depth = false;
+	bool foreign = false;                 // an overlay app's images (no `images`/`memory`: only `shared`)
+	std::vector<uint8_t> external;        // overlay app: which images are handed to the game drawing them
 	std::vector<VkImage> images;          // on the app's device (what the app renders into)
 	std::vector<VkDeviceMemory> memory;
 	std::vector<uint64_t> memory_size;    // of each entry in `memory`
@@ -51,6 +53,7 @@ struct composite_layer
 		quad,
 		cylinder,
 		cube,
+		equirect,
 	} type;
 	const swapchain * chain[2] = {}; // per eye (quad: same for both)
 	uint32_t array_index[2] = {};
@@ -60,7 +63,8 @@ struct composite_layer
 	std::array<float, 4> quad_orientation{0, 0, 0, 1};
 	std::array<float, 3> quad_position{};
 	float quad_size[2] = {1, 1};
-	float cylinder_radius = 1, cylinder_angle = 1, cylinder_aspect = 1;
+	float cylinder_radius = 1, cylinder_angle = 1, cylinder_aspect = 1; // equirect: radius and horizontal angle too
+	float equirect_upper = 0, equirect_lower = 0;
 	int cube_face = 0;
 	bool head_locked = false;
 	bool origin_bottom_left = false;
@@ -80,6 +84,10 @@ public:
 	std::unique_ptr<swapchain> create_swapchain(VkFormat, uint32_t width, uint32_t height, uint32_t array_size,
 	                                            uint32_t mip_levels, uint32_t sample_count, uint32_t image_count, bool depth, bool cube = false);
 	void destroy_swapchain(swapchain &);
+	// an overlay app's swapchain, from the fds of its images (takes them); throws on failure
+	std::unique_ptr<swapchain> import_foreign(const ipc::link_swapchain &, const std::vector<int> & fds);
+	// overlay app: hands an image to / takes it back from the game that samples it (waits for the app's rendering)
+	void hand_over(swapchain &, size_t image, bool to_game);
 	int export_memory(const swapchain & sc, size_t index); // a new fd for the image's memory (color images only)
 
 	// composites into the client's slot images; blocks until the GPU finished. eye_pose: the frame's render poses
