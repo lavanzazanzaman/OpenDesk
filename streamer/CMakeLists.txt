@@ -19,6 +19,10 @@ qt_add_resources(opendesk-streamer "theme" PREFIX "/" FILES theme/violet.qss the
 file(GLOB OPENDESK_ASSETS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS assets/opendesk/*)
 qt_add_resources(opendesk-streamer "opendeskassets" PREFIX "/" FILES ${OPENDESK_ASSETS})
 
+# the What's New tab
+set_source_files_properties(${PROJECT_SOURCE_DIR}/CHANGELOG.md PROPERTIES QT_RESOURCE_ALIAS changelog.md)
+qt_add_resources(opendesk-streamer "changelog" PREFIX "/" FILES ${PROJECT_SOURCE_DIR}/CHANGELOG.md)
+
 target_compile_definitions(opendesk-streamer PRIVATE
     OPENDESK_ENGINE_DIR="${PROJECT_SOURCE_DIR}/engine"
     OPENDESK_VERSION="${PROJECT_VERSION}"

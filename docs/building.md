@@ -76,4 +76,5 @@ tools/ci.sh linux
 
 `tools/release.sh` builds both release files into `dist/`. With `--publish` it also tags the commit and creates the
 GitHub release; the AppImages already out there update from that release. Bump `project(... VERSION ...)` in
-`CMakeLists.txt` first.
+`CMakeLists.txt` and add a section for that version to `CHANGELOG.md` first; the streamer's What's New tab and the
+release notes both come from it.

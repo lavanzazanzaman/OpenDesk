@@ -7,7 +7,8 @@
 #   OpenDesk-Linux-x86_64.AppImage         portable, updates itself from the latest GitHub release
 #   OpenDesk-Linux-x86_64-native.tar.gz    built against this machine's libraries
 #   SHA256SUMS                             read by the AppImage's updater
-# --publish then tags the commit (v<version>) and creates the GitHub release from those files.
+# --publish needs a section for this version in CHANGELOG.md. It tags the commit (v<version>) and creates the GitHub
+# release from those files, with that section as its notes.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,13 +17,15 @@ PUBLISH=0
 case "${1:-}" in
 "") ;;
 --publish) PUBLISH=1 ;;
-*) sed -n '2,10p' "$0"; exit 2 ;;
+*) sed -n '2,11p' "$0"; exit 2 ;;
 esac
 
 VERSION=$(sed -nE 's/^project\(opendesk VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
 [ -n "$VERSION" ] || { echo "no version in CMakeLists.txt" >&2; exit 1; }
 TAG=v$VERSION
+NOTES=$(awk -v v="## $VERSION" '$0 == v {f=1; next} /^## / {f=0} f' CHANGELOG.md)
 if [ $PUBLISH = 1 ]; then
+	[ -n "$NOTES" ] || { echo "no '## $VERSION' section in CHANGELOG.md" >&2; exit 1; }
 	[ -z "$(git status --porcelain)" ] || { echo "commit your changes first" >&2; exit 1; }
 	if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 		echo "$TAG already exists: bump the version in CMakeLists.txt" >&2
@@ -51,5 +54,5 @@ if [ $PUBLISH = 0 ]; then
 fi
 git tag "$TAG"
 git push origin HEAD "$TAG"
-gh release create "$TAG" --title "OpenDesk $VERSION" --generate-notes \
+gh release create "$TAG" --title "OpenDesk $VERSION" --notes "$NOTES" \
 	dist/OpenDesk-Linux-x86_64.AppImage dist/OpenDesk-Linux-x86_64-native.tar.gz dist/SHA256SUMS

@@ -37,7 +37,7 @@ chmod +x OpenDesk-Linux-x86_64.AppImage
 
 The AppImage asks GitHub for the latest release at startup and every few hours, downloads a newer one in the
 background, checks its SHA-256, and then waits for you to restart. You can turn this off under General > Updates.
-On other distributions, [build from source](docs/building.md).
+On other distributions, [build from source](#build-from-source).
 
 ## What works
 
@@ -56,7 +56,7 @@ Things OpenDesk adds on top of what the Windows streamer offers:
 
 - **Runs natively on Linux**, including Proton games
 - **[RiftLift](https://github.com/Villagers654/RiftLift) support**: Oculus PC games installed through RiftLift appear in
-  the headset's Games tab and launch from there
+  the headset's Games tab and launch from there (see [Oculus games](#oculus-games-riftlift))
 - **OpenVR games without SteamVR**, through the bundled [xrizer](https://github.com/Supreeeme/xrizer)
 - **Your choice of graphics card**: run VR on either card, or split it so one renders the game while the other encodes
 - **Live VR encoder load**: the real encode time per frame, and what each quality option costs at your resolution
@@ -65,6 +65,13 @@ Things OpenDesk adds on top of what the Windows streamer offers:
 - **Larger fovea** (up to 50%), **adjustable periphery resolution** and an optional **soft fovea edge**
 - **Automatic version matching**, so newer headset apps neither refuse the PC nor ask you to update it
 - **Settings that match your hardware**: options your PC can't use are greyed out with an explanation
+
+## Oculus games (RiftLift)
+
+Oculus PC games need [RiftLift](https://github.com/Villagers654/RiftLift) installed on the same PC so OpenDesk can find
+it. OpenDesk looks for the `riftlift` command on your `PATH` or in `~/.local/bin`, and for your games in
+`~/.local/share/riftlift`. Use RiftLift's `.deb`, `.rpm` or AUR package, or its `install.sh`. A Flatpak isn't detected,
+and neither is an AppImage unless you put it at `~/.local/bin/riftlift`.
 
 ## Not implemented
 
@@ -83,6 +90,29 @@ These parts of the Windows streamer are left out on purpose:
 |---|---|
 | ![General](docs/screenshots/general.png) | ![VR](docs/screenshots/vr.png) |
 | ![Audio and input](docs/screenshots/audio-input.png) | ![Accounts](docs/screenshots/accounts.png) |
+
+## Build from source
+
+Install the dependencies for your distribution (Arch shown here;
+[`docs/building.md`](docs/building.md) has Ubuntu, Debian, Fedora and openSUSE):
+
+```sh
+sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-wayland ffmpeg libpipewire libpulse libevdev lz4 openssl \
+    vulkan-icd-loader vulkan-headers shaderc mesa libglvnd wayland wayland-protocols openxr python \
+    libx11 libxext libxrandr libxfixes
+```
+
+Then build and run it:
+
+```sh
+git clone https://github.com/lavanzazanzaman/OpenDesk.git
+cd OpenDesk
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+./build/streamer/opendesk-streamer
+```
+
+To install it, run `sudo cmake --install build`. Builds you make yourself don't update themselves: pull and rebuild.
 
 ## Network
 

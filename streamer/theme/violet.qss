@@ -105,6 +105,7 @@ QLabel#cardTitle { color: #B9A8FF; font-size: 12px; font-weight: bold; letter-sp
 QWidget#settingRow { background: transparent; }
 QLabel#settingTitle { color: #FFFFFF; font-size: 14px; }
 QLabel#settingDescription { color: #8A8699; font-size: 12px; }
+QLabel#changelogItem { color: #C9C4D8; font-size: 13px; padding: 3px 0; }
 QFrame#rowSeparator { background: #23202F; border: none; }
 QLabel#pageNote { color: #8A8699; font-size: 13px; }
 

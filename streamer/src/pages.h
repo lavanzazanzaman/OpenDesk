@@ -12,6 +12,7 @@ QWidget * makeStreamingPage(Engine &);
 QWidget * makeVRPage(Engine &);
 QWidget * makeAudioInputPage(Engine &);
 QWidget * makeGeneralPage(Engine &);
+QWidget * makeWhatsNewPage();
 
 class AccountsPage : public QWidget
 {

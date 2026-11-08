@@ -74,7 +74,9 @@ MainWindow::MainWindow(Engine & engine) :
 	        {"VR", makeVRPage(engine_)},
 	        {"AUDIO && INPUT", makeAudioInputPage(engine_)},
 	        {"SHORTCUTS", makeShortcutsPage()},
-	        {"ABOUT", new AboutPage(engine_)}, // last: pinned to the bottom of the strip
+	        // the last two: pinned to the bottom of the strip
+	        {"WHAT'S NEW", makeWhatsNewPage()},
+	        {"ABOUT", new AboutPage(engine_)},
 	};
 	for (int i = 0; i < pages.size(); ++i)
 	{
@@ -83,8 +85,8 @@ MainWindow::MainWindow(Engine & engine) :
 		b->setCheckable(true);
 		b->setCursor(Qt::PointingHandCursor);
 		tabs_->addButton(b, i);
-		if (i == pages.size() - 1)
-			stripLayout->addStretch(); // About apart from the settings, at the bottom
+		if (i == pages.size() - 2)
+			stripLayout->addStretch(); // What's New and About apart from the settings, at the bottom
 		stripLayout->addWidget(b);
 		stack_->addWidget(pages[i].second);
 	}

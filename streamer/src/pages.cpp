@@ -916,6 +916,38 @@ QWidget * makeGeneralPage(Engine & engine)
 	return p.widget;
 }
 
+// ---------------------------------------------------------------------------------------------- WHAT'S NEW
+
+// One card per release, newest first, from CHANGELOG.md
+QWidget * makeWhatsNewPage()
+{
+	auto p = settingsPage({});
+	QFile file(":/changelog.md");
+	QVBoxLayout * release = nullptr;
+	if (file.open(QIODevice::ReadOnly | QIODevice::Text))
+	{
+		const QStringList lines = QString::fromUtf8(file.readAll()).split('\n');
+		for (const QString & line: lines)
+		{
+			if (line.startsWith("## "))
+			{
+				const QString version = line.mid(3).trimmed();
+				release = card(p, QString("Version %1%2").arg(version, version == OPENDESK_VERSION ? " (this version)" : ""));
+			}
+			else if (release && line.startsWith("- "))
+			{
+				auto * item = new QLabel(QString::fromUtf8("\u2022  ") + line.mid(2).trimmed());
+				item->setObjectName("changelogItem");
+				item->setWordWrap(true);
+				item->setTextFormat(Qt::PlainText);
+				release->addWidget(item);
+			}
+		}
+	}
+	p.cards->addStretch();
+	return p.widget;
+}
+
 // ---------------------------------------------------------------------------------------------- ABOUT
 
 AboutPage::AboutPage(Engine & engine) :
