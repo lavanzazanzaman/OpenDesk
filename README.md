@@ -56,6 +56,9 @@ Desktop streaming currently relies mainly on **KDE Plasma on Wayland**, which is
 Other desktop environments and window managers are not tested. OpenDesk falls back to the screen-share portal or X11
 capture there, so it may work, but expect rough edges, and virtual monitors need KDE's KWin. Reports and fixes are welcome.
 
+**VR games should work on any desktop.** They go straight from the game to the encoder without screen capture, so
+they don't depend on your desktop environment, although they've only been tested on KDE so far.
+
 ## Extra features
 
 Things OpenDesk adds on top of what the Windows streamer offers:
