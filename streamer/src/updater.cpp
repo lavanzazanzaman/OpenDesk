@@ -43,8 +43,8 @@ QVersionNumber parse(QString tag)
 
 Updater & Updater::instance()
 {
-	static Updater updater;
-	return updater;
+	static Updater * updater = new Updater(qApp); // (destroyed with the application, before its network plugins go)
+	return *updater;
 }
 
 Updater::Updater(QObject * parent) :
