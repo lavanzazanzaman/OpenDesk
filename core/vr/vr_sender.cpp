@@ -177,8 +177,20 @@ void vr_sender::encode_and_send(const std::vector<const dmabuf_image *> & images
 		bytes au[4];
 		bool sync[4] = {false, false, false, false};
 		bool key = idr.exchange(false);
+		// Frames from another GPU: one upload at a time. Together they would share the link and both finish last; this
+		// way the first image is uploaded in half the time and encodes while the next one uploads.
+		std::mutex upload;
+		const bool other_gpu = enc[0]->config().source_node != enc[0]->config().render_node;
 		auto encode_image = [&](size_t k) {
-			enc[k]->encode(frame_of(*images[k]), key, [&, k](bytes && a, bool s) {
+			const captured_frame frame = frame_of(*images[k]);
+			if (other_gpu)
+			{
+				std::lock_guard lock(upload);
+				enc[k]->stage(frame);
+			}
+			else
+				enc[k]->stage(frame);
+			enc[k]->reencode_last(key, [&, k](bytes && a, bool s) {
 				au[k] = std::move(a);
 				sync[k] = s;
 			});

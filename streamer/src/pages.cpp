@@ -570,8 +570,8 @@ QWidget * makeStreamingPage(Engine & engine)
 	if (nvidia) // AMD/Intel already encode with their fastest preset
 	{
 		row(video, "NVIDIA encoder quality", "Higher quality takes the encoder longer per frame",
-		    combo<int>(170, {{2, "Fast"}, {4, "Balanced"}, {6, "Best quality"}}, s.nvencQuality, apply),
-		    "NVENC preset P2, P4 or P6. With Adaptive encoder speed, VR falls back to faster presets when this one can't\n"
+		    combo<int>(170, {{1, "Fastest"}, {2, "Fast"}, {4, "Balanced"}, {6, "Best quality"}}, s.nvencQuality, apply),
+		    "NVENC preset P1, P2, P4 or P6. With Adaptive encoder speed, VR falls back to faster presets when this one can't\n"
 		    "keep up with the headset's refresh rate");
 		toggleRow(video, "Adaptive encoder speed", "Keeps the full frame rate in VR when encoding falls behind",
 		          s.adaptiveEncoderSpeed, apply,
