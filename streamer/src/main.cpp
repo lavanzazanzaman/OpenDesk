@@ -124,6 +124,12 @@ int main(int argc, char ** argv)
 		return problems ? 1 : 0;
 	}
 
+	if (QApplication::arguments().contains("--list-startup-apps")) // what General > Startup apps offers
+	{
+		for (const DetectedApp & found: detectStartupApps())
+			printf("%s: %s\n", qPrintable(found.name), qPrintable(found.command));
+		return 0;
+	}
 	const bool screenshot = QApplication::arguments().contains("--screenshot");
 	QLockFile lock(QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + "/opendesk-streamer.lock");
 	if (!screenshot && !lock.tryLock(100))

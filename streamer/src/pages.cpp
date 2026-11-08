@@ -2,6 +2,7 @@
 #include "engine.h"
 #include "hardware_encoder.h"
 #include "settings.h"
+#include "startup_apps.h"
 #include "updater.h"
 #include "setup.h"
 #include "sysinfo.h"
@@ -12,6 +13,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QInputDialog>
 #include <QFrame>
 #include <QStandardPaths>
 #include <QGridLayout>
@@ -930,9 +932,40 @@ QWidget * makeGeneralPage(Engine & engine)
 	addApp->setFixedWidth(120);
 	apps->addWidget(addApp, 0, Qt::AlignLeft);
 	apps->addSpacing(8);
+	auto addCommand = [](const QString & command) {
+		auto & st = StreamerSettings::instance();
+		if (!command.trimmed().isEmpty() && !st.startupApps.contains(command))
+		{
+			st.startupApps << command;
+			st.save();
+		}
+	};
+	auto * addMenu = new QMenu(addApp);
+	addApp->setMenu(addMenu);
+	QObject::connect(addMenu, &QMenu::aboutToShow, addMenu, [addMenu, addApp, addCommand] {
+		addMenu->clear();
+		const auto & st = StreamerSettings::instance();
+		for (const DetectedApp & app: detectStartupApps())
+		{
+			auto * action = addMenu->addAction(app.name, addMenu, [addCommand, command = app.command] { addCommand(command); });
+			action->setEnabled(!st.startupApps.contains(app.command));
+		}
+		if (!addMenu->isEmpty())
+			addMenu->addSeparator();
+		addMenu->addAction("Choose an app or AppImage...", addMenu, [addApp, addCommand] {
+			const QString file = QFileDialog::getOpenFileName(addApp, "Choose an app or AppImage", QDir::homePath());
+			if (file.isEmpty())
+				return;
+			QFile picked(file); // AppImages arrive from a browser without the executable bit
+			picked.setPermissions(picked.permissions() | QFile::ExeOwner | QFile::ExeUser);
+			addCommand(startupCommandFor(file));
+		});
+		addMenu->addAction("Enter a command...", addMenu, [addApp, addCommand] {
+			addCommand(QInputDialog::getText(addApp, "Add a startup app", "Command, with any arguments:"));
+		});
+	});
 	auto shown = std::make_shared<QStringList>();
-	auto rebuildApps = std::make_shared<std::function<void()>>();
-	*rebuildApps = [appsHost, appsList, shown, weak = std::weak_ptr(rebuildApps)] {
+	auto rebuildApps = [appsHost, appsList, shown] {
 		auto & st = StreamerSettings::instance();
 		if (appsList->count() == st.startupApps.size() && *shown == st.startupApps)
 			return;
@@ -943,54 +976,35 @@ QWidget * makeGeneralPage(Engine & engine)
 			item->widget()->deleteLater();
 			delete item;
 		}
-		for (int i = 0; i < st.startupApps.size(); ++i)
+		for (const QString & command: st.startupApps)
 		{
 			auto * line = new QWidget(appsHost);
 			auto * h = new QHBoxLayout(line);
 			h->setContentsMargins(0, 0, 0, 0);
-			h->setSpacing(6);
-			auto * command = new QLineEdit(st.startupApps[i]);
-			command->setPlaceholderText("Command, for example: my-vr-tool --flag");
-			auto * browse = new QPushButton("Browse");
+			h->setSpacing(12);
+			auto * text = new QVBoxLayout;
+			text->setSpacing(1);
+			auto * name = new QLabel(startupAppName(command));
+			name->setObjectName("settingTitle");
+			auto * detail = new QLabel(command);
+			detail->setObjectName("settingDescription");
+			detail->setTextFormat(Qt::PlainText);
+			detail->setWordWrap(true);
+			text->addWidget(name);
+			text->addWidget(detail);
 			auto * remove = new QPushButton("Remove");
-			h->addWidget(command, 1);
-			h->addWidget(browse);
+			h->addLayout(text, 1);
 			h->addWidget(remove);
 			appsList->addWidget(line);
-			QObject::connect(command, &QLineEdit::editingFinished, command, [command, i, shown] {
+			QObject::connect(remove, &QPushButton::clicked, appsHost, [command] {
 				auto & s2 = StreamerSettings::instance();
-				if (i < s2.startupApps.size() && s2.startupApps[i] != command->text())
-				{
-					s2.startupApps[i] = command->text();
-					*shown = s2.startupApps;
-					s2.save();
-				}
-			});
-			QObject::connect(browse, &QPushButton::clicked, command, [command] {
-				const QString file = QFileDialog::getOpenFileName(command, "Choose an app", QDir::homePath());
-				if (file.isEmpty())
-					return;
-				command->setText(file.contains(' ') ? '"' + file + '"' : file);
-				emit command->editingFinished();
-			});
-			QObject::connect(remove, &QPushButton::clicked, appsHost, [i, weak] {
-				auto & s2 = StreamerSettings::instance();
-				if (i < s2.startupApps.size())
-					s2.startupApps.removeAt(i);
+				s2.startupApps.removeAll(command);
 				s2.save();
-				if (auto f = weak.lock())
-					(*f)();
 			});
 		}
 	};
-	QObject::connect(addApp, &QPushButton::clicked, addApp, [rebuildApps] {
-		auto & s2 = StreamerSettings::instance();
-		s2.startupApps << QString();
-		s2.save();
-		(*rebuildApps)();
-	});
-	QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, appsHost, [rebuildApps] { (*rebuildApps)(); });
-	(*rebuildApps)();
+	QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, appsHost, rebuildApps);
+	rebuildApps();
 
 	auto * security = card(p, "Security");
 	toggleRow(security, "Ask for computer access", "Prompt when a new headset searches for computers", s.showPairingRequests);
