@@ -76,7 +76,7 @@ public:
 	bool enableAQ = true;
 	bool enable2Pass = false;
 	bool adaptiveEncoderSpeed = true; // VR: faster NVENC presets while encoding can't keep up with the refresh rate
-	int nvencQuality = 4;             // NVENC preset: 2 fast, 4 balanced, 6 best quality
+	int nvencQuality = 1;             // NVENC preset: 1 fastest (scored the same as slower ones), 2, 4, 6
 	bool dualGpu = false;             // one card runs the games, another encodes the stream
 	QString gameGpu, streamingGpu;    // PCI addresses (render nodes can change between boots)
 	GamepadEmulation gamepadEmulation = GamepadEmulation::Automatic;

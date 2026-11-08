@@ -562,17 +562,18 @@ QWidget * makeStreamingPage(Engine & engine)
 	if (amd || nvidia) // VAAPI on Intel has neither
 	{
 		toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes (recommended)", s.enableAQ, apply,
-		          nvidia ? "NVENC spatial adaptive quantization" : "AMD VBAQ (variance-based adaptive quantization)");
+		          nvidia ? "NVENC spatial adaptive quantization. Turning it off saves about 1 ms per frame with NVENC"
+		                 : "AMD VBAQ (variance-based adaptive quantization)");
 		toggleRow(video, "2-pass encoding", "Better quality per bit, costs some GPU time", s.enable2Pass, apply,
 		          QString("Only use when you have performance headroom to spare\n") +
 		                  (nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis"));
 	}
 	if (nvidia) // AMD/Intel already encode with their fastest preset
 	{
-		row(video, "NVIDIA encoder quality", "Higher quality takes the encoder longer per frame",
-		    combo<int>(170, {{1, "Fastest"}, {2, "Fast"}, {4, "Balanced"}, {6, "Best quality"}}, s.nvencQuality, apply),
-		    "NVENC preset P1, P2, P4 or P6. With Adaptive encoder speed, VR falls back to faster presets when this one can't\n"
-		    "keep up with the headset's refresh rate");
+		row(video, "NVIDIA encoder speed", "Slower settings add latency for almost no visible gain",
+		    combo<int>(170, {{1, "Fastest (recommended)"}, {2, "Fast"}, {4, "Balanced"}, {6, "Slowest"}}, s.nvencQuality, apply),
+		    "NVENC preset P1, P2, P4 or P6. On gameplay footage these score the same picture quality at normal VR bitrates\n"
+		    "(VMAF within 0.05 from 33 Mbit/s per eye, 0.25 at a very low 6 Mbit/s), so the fastest is the default.");
 		toggleRow(video, "Adaptive encoder speed", "Keeps the full frame rate in VR when encoding falls behind",
 		          s.adaptiveEncoderSpeed, apply,
 		          "Switches NVENC to faster presets while encoding can't keep up with the headset's refresh rate\n"

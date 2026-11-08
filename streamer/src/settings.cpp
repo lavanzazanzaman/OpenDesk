@@ -98,7 +98,7 @@ void StreamerSettings::resetStreaming()
 	enableAQ = true;
 	enable2Pass = false;
 	adaptiveEncoderSpeed = true;
-	nvencQuality = 4;
+	nvencQuality = 1;
 	dualGpu = false;
 	gameGpu.clear();
 	streamingGpu.clear();
@@ -176,8 +176,8 @@ void StreamerSettings::load()
 	b("EnableAQ", enableAQ);
 	b("Enable2Pass", enable2Pass);
 	b("AdaptiveEncoderSpeed", adaptiveEncoderSpeed);
-	if (o.contains("NvencQuality"))
-		nvencQuality = o["NvencQuality"].toInt();
+	if (o.contains("NvencPreset"))
+		nvencQuality = o["NvencPreset"].toInt();
 	b("DualGpu", dualGpu);
 	s("GameGpu", gameGpu);
 	s("StreamingGpu", streamingGpu);
@@ -243,7 +243,7 @@ void StreamerSettings::save()
 	o["EnableAQ"] = enableAQ;
 	o["Enable2Pass"] = enable2Pass;
 	o["AdaptiveEncoderSpeed"] = adaptiveEncoderSpeed;
-	o["NvencQuality"] = nvencQuality;
+	o["NvencPreset"] = nvencQuality;
 	o["DualGpu"] = dualGpu;
 	o["GameGpu"] = gameGpu;
 	o["StreamingGpu"] = streamingGpu;
