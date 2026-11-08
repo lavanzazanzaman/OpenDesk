@@ -47,6 +47,8 @@ public:
 	QJsonObject headsetMobileSettings;
 	QJsonObject headsetUserSettings;
 	QJsonObject lastVideo;
+	QJsonObject lastEncodeStats;    // VR: ms, worst, fps, megapixels, nvenc
+	qint64 lastEncodeStatsAt = 0;  // when (ms since epoch)
 	QString captureErrorMessage; // screen capture failed for the current connection
 	QJsonObject computer; // "ready" event
 	bool connectedViaUsb = false;
@@ -56,6 +58,7 @@ signals:
 	void pairingRequest(QString account, int platform, QString host);
 	void headsetChanged();
 	void videoChanged();
+	void encodeStatsChanged();
 	void captureError(QString message);
 	void screenshotSaved(QString path);
 	void headsetNewer(QString supported); // the headset app is newer than this streamer's upstream version

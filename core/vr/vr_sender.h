@@ -34,7 +34,8 @@ struct vr_stream_params
 	bool full_range = false;
 	bool vbaq = false, pre_encode = false;
 	bool adaptive_speed = false; // NVENC: faster presets while encoding is slower than the frame period
-	int nvenc_preset = 4;        // NVENC p1..p7 ("Encoder quality"; adaptive speed only goes faster than this)
+	int nvenc_preset = 1;        // NVENC p1..p7 (adaptive speed only goes faster than this)
+	int amd_preset = 0;          // AMD VAAPI quality preset (0 speed, 1 balanced, 2 quality)
 	// foveated streaming (eye-tracked headsets): a fovea crop of this size per eye at render density, periphery at
 	// periphery_width x periphery_height (0: off)
 	int fovea_width = 0, fovea_height = 0;
@@ -57,6 +58,8 @@ public:
 		std::function<vr_render_info()> pose;               // test pattern: latest headset pose -> eye poses + FOV
 		std::function<void(video_codec)> active_codec;      // any thread
 		std::function<double(int32_t pose_index)> pose_age_ms; // since that FrameData arrived; < 0 if unknown
+		// every few seconds, any thread: mean and worst encode time (ms), frame rate, megapixels per frame, NVENC or not
+		std::function<void(double, double, int, double, bool)> encode_stats;
 	};
 
 	vr_sender(stream_channel & video, vr_stream_params, callbacks, bool test_pattern);
@@ -112,7 +115,6 @@ private:
 	std::thread encoder_thread;
 
 	int preset = 4; // NVENC p1..p7 (adaptive speed lowers it under load)
-	bool shed_two_pass = false; // adaptive speed: 2-pass off, at the fastest preset and short of time
 	double worst_encode = 0, longest_gap = 0;                      // this statistics window (ms)
 	std::chrono::steady_clock::time_point last_sent{};
 	double load_ms = 0;

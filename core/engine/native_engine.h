@@ -42,7 +42,8 @@ struct engine_options
 	bool aq = true;                            // "Adaptive quantization" -> AMD VBAQ
 	bool two_pass = false;                     // "2-Pass encoding" -> AMD pre-encode
 	bool adaptive_speed = true;                // "Adaptive encoder speed" -> VR NVENC preset follows the load
-	int nvenc_preset = 1;                      // "NVIDIA encoder speed" (NVENC p1..p7)
+	int nvenc_preset = 1;                      // NVENC p1..p7 (the fastest: same picture quality in tests)
+	int amd_preset = 0;                        // "AMD encoder speed" (VAAPI: 0 speed, 1 balanced, 2 quality)
 	QString gpu_selection;                     // which cards render and encode, as last applied
 	double periphery_scale = 0.5;              // "Periphery Resolution": foveated streaming's periphery, fraction of the render size
 	double fovea_size = 0.25;                  // "Fovea Size": foveated streaming crop, fraction of the eye render size

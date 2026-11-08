@@ -66,7 +66,7 @@ fi
 FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
- "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NVENC_QUALITY:+, \"NvencPreset\": $OPENDESK_TEST_NVENC_QUALITY}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
+ "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_TWO_PASS:+, \"Enable2Pass\": true}${OPENDESK_TEST_AMD_SPEED:+, \"AmdEncoderSpeed\": $OPENDESK_TEST_AMD_SPEED}${OPENDESK_TEST_QPA:+, \"StartMinimized\": false, \"StartMinimizedInTray\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
 J
 rm -f $W/config/OpenDesk/engine.json
 # the streamer's screenshots (ScreenshotToDesktop) go to $XDG_CONFIG_HOME/user-dirs.dirs' pictures folder, not ~/Pictures
@@ -106,8 +106,13 @@ if [ "$SCENARIO" = X11 ]; then
 	X11_ENV="DISPLAY=:77 XDG_SESSION_TYPE=x11 WAYLAND_DISPLAY="
 fi
 [ "$SCENARIO" = VR ] && export OPENDESK_TEST_VIDEO_SNDBUF=4194304 # like a Wi-Fi connection (loopback keeps it small)
-env \$X11_ENV OPENDESK_VRCHAT_OSC_DIR=$W/osc OPENDESK_FACE_OSC_PORT=9123 OPENDESK_XRIZER=\${OPENDESK_XRIZER-$HOME/.local/share/opendesk/xrizer-build} PATH=$W/bin:\$PATH QT_QPA_PLATFORM=offscreen OPENDESK_QUIT_AFTER=60 ${OPENDESK_STREAMER_BIN:-$R/build/streamer/opendesk-streamer} > $W/streamer.out 2>&1 &
+env \$X11_ENV OPENDESK_VRCHAT_OSC_DIR=$W/osc OPENDESK_FACE_OSC_PORT=9123 OPENDESK_XRIZER=\${OPENDESK_XRIZER-$HOME/.local/share/opendesk/xrizer-build} PATH=$W/bin:\$PATH QT_QPA_PLATFORM=${OPENDESK_TEST_QPA:-offscreen} OPENDESK_QUIT_AFTER=60 ${OPENDESK_STREAMER_BIN:-$R/build/streamer/opendesk-streamer} > $W/streamer.out 2>&1 &
 P=\$!
+# OPENDESK_TEST_QPA=wayland + OPENDESK_TEST_KWIN_SCRIPT=file.js: the streamer's window on the nested desktop; the KWin
+# script runs while the desktop streams (print() output: kwin.log)
+if [ -n "${OPENDESK_TEST_KWIN_SCRIPT:-}" ]; then
+	(sleep 5; I=\$(qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript $OPENDESK_TEST_KWIN_SCRIPT odtest); qdbus6 org.kde.KWin /Scripting/Script\$I org.kde.kwin.Script.run) &
+fi
 sleep 2
 [ "$SCENARIO" = VRCLIENT ] && ($R/build/core/vr-test-client 30 > $W/client.out 2>&1 &)
 # AUTOVR: two probing clients (connect, never render - like Proton's helpers) must not switch the headset to VR

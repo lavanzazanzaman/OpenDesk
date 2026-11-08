@@ -581,8 +581,8 @@ void hardware_encoder::setup_filters(const captured_frame & f)
 		av_opt_set(codec->priv_data, "rc_mode", "CBR", 0);
 		// Mesa radeonsi VA quality level (frontends/va/encode.c, vlVaQualityBits):
 		//   bit0 valid, bits1-2 preset (0 speed), bit3 pre-encode, bit4 VBAQ; 0 = speed preset, nothing extra
-		if (gpu_vendor(cfg.render_node) == 0x1002 && (cfg.pre_encode || cfg.vbaq))
-			codec->compression_level = 1 | (cfg.pre_encode ? 1 << 3 : 0) | (cfg.vbaq ? 1 << 4 : 0);
+		if (gpu_vendor(cfg.render_node) == 0x1002 && (cfg.pre_encode || cfg.vbaq || cfg.amd_preset))
+			codec->compression_level = 1 | ((cfg.amd_preset & 3) << 1) | (cfg.pre_encode ? 1 << 3 : 0) | (cfg.vbaq ? 1 << 4 : 0);
 		av_opt_set_int(codec->priv_data, "async_depth", 1, 0); // no pipelined extra frame
 		if (cfg.codec == video_codec::h264 || cfg.codec == video_codec::h264_plus)
 			av_opt_set(codec->priv_data, "profile", "high", 0);

@@ -26,6 +26,10 @@
 #include <QListView>
 #include <QMenu>
 #include <QPointer>
+#include <QProgressBar>
+#include <QStyle>
+#include <QTimer>
+#include <QDateTime>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -539,7 +543,9 @@ QWidget * makeStreamingPage(Engine & engine)
 		nvidia |= od::gpu_vendor(n) == 0x10de;
 		amd |= od::gpu_vendor(n) == 0x1002;
 	}
-	const auto gpus = od::list_gpus();
+	auto gpus = od::list_gpus();
+	if (qEnvironmentVariableIsSet("OPENDESK_TEST_ONE_GPU") && gpus.size() > 1) // (screenshots)
+		gpus.resize(1);
 	for (const auto & g: gpus) // (with two cards, either can become the encoder)
 	{
 		nvidia |= g.vendor == 0x10de;
@@ -559,28 +565,119 @@ QWidget * makeStreamingPage(Engine & engine)
 	hideUnsupportedCodecs(codecs, nodes, apply);
 	row(video, "Preferred codec", "Only codecs your GPU can encode are listed", codecs,
 	    "H.264+ streams VR as several H.264 slices. 10-bit reduces banding in dark gradients.");
-	if (amd || nvidia) // VAAPI on Intel has neither
 	{
-		toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes (recommended)", s.enableAQ, apply,
-		          nvidia ? "NVENC spatial adaptive quantization. Turning it off saves about 1 ms per frame with NVENC"
-		                 : "AMD VBAQ (variance-based adaptive quantization)");
-		toggleRow(video, "2-pass encoding", "Better quality per bit, costs some GPU time", s.enable2Pass, apply,
-		          QString("Only use when you have performance headroom to spare\n") +
-		                  (nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis"));
-	}
-	if (nvidia) // AMD/Intel already encode with their fastest preset
-	{
-		row(video, "NVIDIA encoder speed", "Slower settings add latency for almost no visible gain",
-		    combo<int>(170, {{1, "Fastest (recommended)"}, {2, "Fast"}, {4, "Balanced"}, {6, "Slowest"}}, s.nvencQuality, apply),
-		    "NVENC preset P1, P2, P4 or P6. On gameplay footage these score the same picture quality at normal VR bitrates\n"
-		    "(VMAF within 0.05 from 33 Mbit/s per eye, 0.25 at a very low 6 Mbit/s), so the fastest is the default.");
-		toggleRow(video, "Adaptive encoder speed", "Keeps the full frame rate in VR when encoding falls behind",
-		          s.adaptiveEncoderSpeed, apply,
-		          "Switches NVENC to faster presets while encoding can't keep up with the headset's refresh rate\n"
-		          "(slightly less detail per bit) and back once there is headroom again");
+		// (VAAPI on Intel has neither: shown greyed out, see below)
+		if (amd)
+			row(video, "AMD encoder speed", "Try them and compare the encoder load above",
+			    combo<int>(170, {{0, "Speed"}, {1, "Balanced"}, {2, "Quality"}}, s.amdEncoderSpeed, apply),
+			    "The AMD encoder's quality preset. Applies to the next frames of the stream");
+		auto * aq = toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes", s.enableAQ, apply,
+		                      nvidia ? "NVENC spatial adaptive quantization" : "AMD VBAQ (variance-based adaptive quantization)");
+		auto * two_pass = toggleRow(video, "2-pass encoding", "Better quality per bit", s.enable2Pass, apply,
+		                            nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis");
+
+		// VR encoder load: the measured time per frame, and what each option costs at this resolution
+		auto * load = card(p, "VR encoder load");
+		// the first thing on the tab
+		p.cards->removeWidget(load->parentWidget());
+		p.cards->insertWidget(0, load->parentWidget());
+		auto * bar = new QProgressBar;
+		bar->setObjectName("encodeLoad");
+		bar->setFixedSize(150, 10);
+		bar->setTextVisible(false);
+		bar->setRange(0, 100);
+		auto * value = new QLabel;
+		value->setObjectName("settingTitle");
+		auto * host = new QWidget;
+		auto * h = new QHBoxLayout(host);
+		h->setContentsMargins(0, 0, 0, 0);
+		h->setSpacing(10);
+		h->addWidget(value);
+		h->addWidget(bar);
+		auto * time_row = row(load, "Time to encode each frame", "Start a VR game to measure this", host,
+		                      "Measured while a VR game streams. The frame time is what the headset's refresh rate allows;\n"
+		                      "close to it, frames can arrive unevenly even though the frame rate looks steady.");
+		auto * verdict = time_row->findChild<QLabel *>("settingDescription");
+		auto * aq_text = aq->findChild<QLabel *>("settingDescription");
+		auto * pass_text = two_pass->findChild<QLabel *>("settingDescription");
+		const bool supported = amd || nvidia;
+		auto refresh = [&engine, bar, value, verdict, aq_text, pass_text, supported] {
+			auto & st = StreamerSettings::instance();
+			const auto & e = engine.lastEncodeStats;
+			const bool known = !e.isEmpty(), nvenc = known && e["nvenc"].toBool();
+			// measured with NVENC on a two-card setup: ms per megapixel of the encoded images
+			constexpr double aq_ms_per_mp = 0.215, two_pass_ms_per_mp = 0.127;
+			const double mp = e["megapixels"].toDouble();
+			auto cost = [&](const char * what, bool on, double per_mp) {
+				if (!nvenc)
+					return QString(what);
+				return QString("%1 - %2 about %3 ms per frame").arg(what, on ? "costs" : "would add").arg(per_mp * mp, 0, 'f', 1);
+			};
+			if (supported)
+			{
+				aq_text->setText(cost("Fewer compression artifacts in dark scenes", st.enableAQ, aq_ms_per_mp));
+				pass_text->setText(cost("Better quality per bit", st.enable2Pass, two_pass_ms_per_mp));
+			}
+			if (!known)
+			{
+				value->setText("-");
+				bar->setValue(0);
+				return;
+			}
+			const double ms = e["ms"].toDouble(), budget = 1000.0 / std::max(e["fps"].toInt(), 1), share = ms / budget;
+			const bool live = QDateTime::currentMSecsSinceEpoch() - engine.lastEncodeStatsAt < 12000;
+			value->setText(QString("%1 of %2 ms").arg(ms, 0, 'f', 1).arg(budget, 0, 'f', 1));
+			bar->setValue(int(std::min(share, 1.0) * 100));
+			bar->setProperty("level", share < 0.6 ? "good" : share < 0.85 ? "ok" : "tight");
+			bar->style()->unpolish(bar);
+			bar->style()->polish(bar);
+			QString text = !live ? QString("Last VR session at %1 Hz").arg(e["fps"].toInt())
+			               : share < 0.6 ? QString("Plenty of headroom")
+			               : share < 0.85 ? QString("Some headroom")
+			                              : QString("Tight: frames can arrive unevenly");
+			if (nvenc && share >= 0.85)
+			{
+				double saved = (st.enableAQ ? aq_ms_per_mp * mp : 0) + (st.enable2Pass ? two_pass_ms_per_mp * mp : 0);
+				if (saved > 0.05)
+					text += QString(". The options below could save about %1 ms").arg(saved, 0, 'f', 1);
+			}
+			verdict->setText(text);
+		};
+		if (!amd && !nvidia)
+		{
+			const QString notice("Not supported by this graphics card's encoder");
+			for (QWidget * r: {aq, two_pass})
+			{
+				r->findChild<QLabel *>("settingDescription")->setText(notice);
+				r->setEnabled(false);
+				for (QLabel * l: r->findChildren<QLabel *>())
+					l->setToolTip(notice);
+			}
+		}
+		else
+			refresh();
+		if (amd || nvidia)
+			QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, bar, refresh);
+		QObject::connect(&engine, &Engine::encodeStatsChanged, bar, refresh);
+		auto * tick = new QTimer(bar); // "last session" once the numbers stop coming
+		QObject::connect(tick, &QTimer::timeout, bar, refresh);
+		tick->start(5000);
 	}
 
-	if (gpus.size() >= 2)
+	if (gpus.size() < 2)
+	{
+		static bool unused = false; // (never on: the switch is disabled)
+		auto * cards = card(p, "Graphics cards");
+		auto * dual = toggleRow(cards, "Use two graphics cards",
+#ifdef _WIN32
+		                        "Only available on Linux for now",
+#else
+		                        gpus.empty() ? QString("Needs two graphics cards") : QString("Needs two graphics cards. This PC has one: %1").arg(QString::fromStdString(gpus[0].name)),
+#endif
+		                        unused);
+		dual->setEnabled(false);
+	}
+	else
 	{
 		// sensible first choice: games where they run now, the stream on another card (an NVIDIA one if there is one)
 		if (s.gameGpu.isEmpty() || s.streamingGpu.isEmpty())

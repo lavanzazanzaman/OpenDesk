@@ -451,6 +451,8 @@ void native_engine::set_options(QJsonObject o)
 		options.adaptive_speed = o["adaptive_speed"].toBool();
 	if (o.contains("nvenc_preset"))
 		options.nvenc_preset = std::clamp(o["nvenc_preset"].toInt(4), 1, 7);
+	if (o.contains("amd_preset"))
+		options.amd_preset = std::clamp(o["amd_preset"].toInt(), 0, 2);
 	if (o.contains("gpu_selection") && o["gpu_selection"].toString() != options.gpu_selection)
 	{
 		options.gpu_selection = o["gpu_selection"].toString();
@@ -1137,6 +1139,7 @@ void native_engine::update_video(bool force)
 	p.vbaq = options.aq;
 	p.pre_encode = options.two_pass;
 	p.nvenc_preset = options.nvenc_preset;
+	p.amd_preset = options.amd_preset;
 
 	if (current->video && current->video->running() && p == current->video_params && !force)
 		return;
@@ -1623,6 +1626,7 @@ vr_stream_params native_engine::vr_params(session * sess) const
 	p.pre_encode = options.two_pass;
 	p.adaptive_speed = options.adaptive_speed;
 	p.nvenc_preset = options.nvenc_preset;
+	p.amd_preset = options.amd_preset;
 	// foveated streaming: the headset enables it (eye-tracked headsets, SharedMobileSettings.FoveatedStreaming); the fovea
 	// crop is the eye render size x "Fovea Size", in multiples of 64 like the Windows streamer - at least 384 x 384: AMD's
 	// HEVC / AV1 encoders take no narrower frames (VAAPI constraints: width 384-8192), small Fovea Sizes would fail there
@@ -1640,10 +1644,10 @@ void native_engine::start_vr(bool force)
 {
 	session * sess = current.get();
 	vr_stream_params p = vr_params(sess);
-	if (sess->video && sess->video->running() && !force && sess->vr_external == (vr && vr->has_client()) && sess->vr_params_signature == std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset, p.fovea_width, p.fovea_height, p.periphery_scale))
+	if (sess->video && sess->video->running() && !force && sess->vr_external == (vr && vr->has_client()) && sess->vr_params_signature == std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset + 32 * p.amd_preset, p.fovea_width, p.fovea_height, p.periphery_scale))
 		return;
 	sess->vr_external = vr && vr->has_client();
-	sess->vr_params_signature = std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset, p.fovea_width, p.fovea_height, p.periphery_scale);
+	sess->vr_params_signature = std::format("{}/{}x{}/{}/{}/{}/{}/{}/{}/{}x{}/{}", p.fps, p.eye_width, p.eye_height, p.kbps, int(p.codec), p.pre_encode, p.vbaq, p.full_range, p.adaptive_speed + 2 * p.nvenc_preset + 32 * p.amd_preset, p.fovea_width, p.fovea_height, p.periphery_scale);
 	stop_video_source(sess);
 	auto tracking = sess->vr_tracking;
 	auto logger = [this](std::string line) { QMetaObject::invokeMethod(this, [this, line] { info(QString::fromStdString(line)); }); };
@@ -1680,6 +1684,11 @@ void native_engine::start_vr(bool force)
 		if (i != index || !ns)
 			return -1.0;
 		return double(std::chrono::steady_clock::now().time_since_epoch().count() - ns) / 1e6;
+	};
+	cb.encode_stats = [this](double ms, double worst, int fps, double megapixels, bool nvenc) {
+		QMetaObject::invokeMethod(this, [=, this] {
+			emit_event("encode_stats", {{"ms", ms}, {"worst", worst}, {"fps", fps}, {"megapixels", megapixels}, {"nvenc", nvenc}});
+		});
 	};
 	cb.active_codec = [this, sess](video_codec c) {
 		QMetaObject::invokeMethod(this, [this, sess, c] {

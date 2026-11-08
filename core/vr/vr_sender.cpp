@@ -95,8 +95,9 @@ void vr_sender::open_encoders(const std::vector<const dmabuf_image *> & images)
 				encoder_config ec{int(images[k]->width), int(images[k]->height), params.fps, kbps, c, node, params.full_range};
 				ec.source_node = vr_render_node();
 				ec.vbaq = params.vbaq;
-				ec.pre_encode = params.pre_encode && !shed_two_pass;
+				ec.pre_encode = params.pre_encode;
 				ec.preset = preset;
+				ec.amd_preset = params.amd_preset;
 				enc[k] = std::make_unique<hardware_encoder>(ec);
 				enc[k]->set_log(cb.log);
 				enc[k]->prime(frame_of(*images[k]));
@@ -256,6 +257,13 @@ void vr_sender::encode_and_send(const std::vector<const dmabuf_image *> & images
 			       + (n_images == 4 ? std::format(", fovea at {},{} / {},{} (follows the gaze)", info.fovea_top_left[0][0], info.fovea_top_left[0][1],
 			                                      info.fovea_top_left[1][0], info.fovea_top_left[1][1])
 			                        : std::string()));
+			if (cb.encode_stats && n > 0)
+			{
+				double pixels = 0;
+				for (size_t k = 0; k < open_count && enc[k]; ++k)
+					pixels += double(enc[k]->config().width) * enc[k]->config().height;
+				cb.encode_stats(encode_ms / n, worst_encode, params.fps, pixels / 1e6, enc[0] && std::string_view(enc[0]->backend()) == "NVENC");
+			}
 			max_queue = 0;
 			worst_encode = longest_gap = 0;
 			last_frames = frames;
@@ -327,16 +335,6 @@ void vr_sender::adapt_speed(double ms)
 	load_frames = 0;
 	auto now = std::chrono::steady_clock::now();
 	int want = preset;
-	// At the fastest preset, 2-pass is what's left to give up: about 1 ms per frame, and no measurable quality at VR
-	// bitrates. Well before the budget is gone: encode times near the frame period make frames arrive unevenly.
-	if (preset == 1 && params.pre_encode && !shed_two_pass && avg > 0.7 * budget)
-	{
-		cb.log(std::format("[vr] encoding takes {:.1f} ms of the {:.1f} ms frame budget: NVENC 2-pass off", avg, budget));
-		shed_two_pass = true;
-		for (auto & e: enc) // re-opened on the next frame (IDR, same VideoFormat)
-			e.reset();
-		return;
-	}
 	if (avg > 0.9 * budget && preset > 1)
 		want = preset - 1; // can't keep up: faster
 	else if (avg < 0.55 * budget && preset < params.nvenc_preset && now - preset_changed > 15s)

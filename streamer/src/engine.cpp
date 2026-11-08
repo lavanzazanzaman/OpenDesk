@@ -26,6 +26,8 @@ Engine::Engine(QObject * parent) :
         QObject(parent)
 {
 	applyGpuSelection();
+	if (const QByteArray stats = qgetenv("OPENDESK_TEST_ENCODE_STATS"); !stats.isEmpty()) // (screenshots)
+		lastEncodeStats = QJsonDocument::fromJson(stats).object();
 	QDir().mkpath(QFileInfo(logPath()).path());
 	log_.setFileName(logPath());
 	if (!log_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
@@ -102,7 +104,7 @@ QJsonObject Engine::optionsJson() const
 	        {"aq", s.enableAQ},
 	        {"two_pass", s.enable2Pass},
 	        {"adaptive_speed", s.adaptiveEncoderSpeed},
-	        {"nvenc_preset", s.nvencQuality},
+	        {"amd_preset", s.amdEncoderSpeed},
 	        {"gpu_selection", s.dualGpu ? s.gameGpu + "/" + s.streamingGpu : QString()},
 	        {"fovea_size", s.foveaSize},
 	        {"periphery_scale", s.peripheryScale},
@@ -291,6 +293,12 @@ void Engine::handle(const QJsonObject & ev)
 		for (auto it = values.begin(); it != values.end(); ++it)
 			target[it.key()] = it.value();
 		emit headsetChanged();
+	}
+	else if (type == "encode_stats")
+	{
+		lastEncodeStats = ev;
+		lastEncodeStatsAt = QDateTime::currentMSecsSinceEpoch();
+		emit encodeStatsChanged();
 	}
 	else if (type == "video")
 	{

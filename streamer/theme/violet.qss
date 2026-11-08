@@ -121,3 +121,7 @@ QLabel#summaryOk { color: #46A758; font-size: 13px; font-weight: 600; padding: 2
 QLabel#summaryWarning { color: #F5A524; font-size: 13px; font-weight: 600; padding: 2px 0 4px 2px; }
 QScrollArea#setupScroll, QScrollArea#setupScroll > QWidget > QWidget#qt_scrollarea_viewport { background: transparent; border: none; }
 QScrollArea#setupScroll QWidget#qt_scrollarea_viewport { background: transparent; }
+QProgressBar#encodeLoad { background: #0B0A10; border: 1px solid #332E45; border-radius: 5px; }
+QProgressBar#encodeLoad::chunk { background: #46A758; border-radius: 4px; }
+QProgressBar#encodeLoad[level="ok"]::chunk { background: #F5A524; }
+QProgressBar#encodeLoad[level="tight"]::chunk { background: #E5484D; }

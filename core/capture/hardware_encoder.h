@@ -42,6 +42,7 @@ struct encoder_config
 	bool vbaq = false;       // "Adaptive quantization": variance-based adaptive quantization
 	int preset = 4;          // NVENC p1 (fastest) .. p7
 	std::string source_node; // the GPU the frames are on, when another one renders them (empty: render_node)
+	int amd_preset = 0;      // AMD VAAPI quality preset: 0 speed, 1 balanced, 2 quality
 	bool operator==(const encoder_config &) const = default;
 };
 
