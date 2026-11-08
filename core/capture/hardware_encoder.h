@@ -179,8 +179,7 @@ std::string default_render_node();
 // The GPU for VR (apps render there, its buffers and encoder live there): the display GPU, except on hybrid laptops
 // whose display runs on an integrated GPU, where the discrete one (OPENDESK_VR_RENDER_NODE overrides).
 std::string vr_render_node();
-// the GPU encoding VR (vr_render_node() unless two cards are in use) and the desktop (the display's unless the
-// streaming card can take its frames)
+// the GPU encoding VR (vr_render_node() unless two cards are in use) and the desktop (always the display's)
 std::string vr_encode_node();
 std::string desktop_encode_node();
 // dual-GPU use (PCI addresses like 0000:03:00.0; empty: automatic / one card for everything)

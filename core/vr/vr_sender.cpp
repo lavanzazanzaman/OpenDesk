@@ -95,7 +95,7 @@ void vr_sender::open_encoders(const std::vector<const dmabuf_image *> & images)
 				encoder_config ec{int(images[k]->width), int(images[k]->height), params.fps, kbps, c, node, params.full_range};
 				ec.source_node = vr_render_node();
 				ec.vbaq = params.vbaq;
-				ec.pre_encode = params.pre_encode;
+				ec.pre_encode = params.pre_encode && !shed_two_pass;
 				ec.preset = preset;
 				enc[k] = std::make_unique<hardware_encoder>(ec);
 				enc[k]->set_log(cb.log);
@@ -204,6 +204,7 @@ void vr_sender::encode_and_send(const std::vector<const dmabuf_image *> & images
 			f.get(); // rethrows their errors
 		double this_encode = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
 		encode_ms += this_encode;
+		worst_encode = std::max(worst_encode, this_encode);
 		adapt_speed(this_encode);
 		for (size_t k = 0; k < n; ++k)
 			if (au[k].empty())
@@ -234,6 +235,12 @@ void vr_sender::encode_and_send(const std::vector<const dmabuf_image *> & images
 		if (frames == 0)
 			cb.log(std::format("[vr] -> first stereo frame ({}) {} + {} bytes", sync[0] ? "sync" : "NON-SYNC", au[0].size(), au[1].size()));
 		++frames;
+		{
+			const auto sent_at = clock::now();
+			if (last_sent.time_since_epoch().count())
+				longest_gap = std::max(longest_gap, std::chrono::duration<double, std::milli>(sent_at - last_sent).count());
+			last_sent = sent_at;
+		}
 		for (size_t k = 0; k < n; ++k)
 			sent_bytes += int64_t(au[k].size());
 		const size_t n_images = n;
@@ -241,15 +248,16 @@ void vr_sender::encode_and_send(const std::vector<const dmabuf_image *> & images
 		{
 			static thread_local int64_t last_frames = 0;
 			double n = double(frames - last_frames);
-			cb.log(std::format("[vr] {} frames, {:.1f} fps, {:.1f} Mbit/s, encode {:.2f} ms per frame{}, pose frame {}, network queue up to {} KB{}{}",
+			cb.log(std::format("[vr] {} frames, {:.1f} fps, {:.1f} Mbit/s, encode {:.2f} ms per frame{} (worst {:.1f}), longest gap between frames {:.1f} ms, pose frame {}, network queue up to {} KB{}{}",
 			                   frames, n / span, sent_bytes * 8 / span / 1e6, n ? encode_ms / n : 0,
-			                   enc[0] && std::string_view(enc[0]->backend()) == "NVENC" ? std::format(" (p{})", preset) : std::string(),
+			                   enc[0] && std::string_view(enc[0]->backend()) == "NVENC" ? std::format(" (p{})", preset) : std::string(), worst_encode, longest_gap,
 			                   info.pose_index, max_queue / 1024, skipped ? std::format(", {} skipped so far", skipped) : std::string(),
 			                   held_back ? std::format(", {} held back for the network so far", held_back) : std::string())
 			       + (n_images == 4 ? std::format(", fovea at {},{} / {},{} (follows the gaze)", info.fovea_top_left[0][0], info.fovea_top_left[0][1],
 			                                      info.fovea_top_left[1][0], info.fovea_top_left[1][1])
 			                        : std::string()));
 			max_queue = 0;
+			worst_encode = longest_gap = 0;
 			last_frames = frames;
 			sent_bytes = 0;
 			encode_ms = 0;
@@ -319,6 +327,16 @@ void vr_sender::adapt_speed(double ms)
 	load_frames = 0;
 	auto now = std::chrono::steady_clock::now();
 	int want = preset;
+	// At the fastest preset, 2-pass is what's left to give up: about 1 ms per frame, and no measurable quality at VR
+	// bitrates. Well before the budget is gone: encode times near the frame period make frames arrive unevenly.
+	if (preset == 1 && params.pre_encode && !shed_two_pass && avg > 0.7 * budget)
+	{
+		cb.log(std::format("[vr] encoding takes {:.1f} ms of the {:.1f} ms frame budget: NVENC 2-pass off", avg, budget));
+		shed_two_pass = true;
+		for (auto & e: enc) // re-opened on the next frame (IDR, same VideoFormat)
+			e.reset();
+		return;
+	}
 	if (avg > 0.9 * budget && preset > 1)
 		want = preset - 1; // can't keep up: faster
 	else if (avg < 0.55 * budget && preset < params.nvenc_preset && now - preset_changed > 15s)

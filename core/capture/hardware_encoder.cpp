@@ -338,9 +338,9 @@ std::string vr_encode_node()
 
 std::string desktop_encode_node()
 {
-	const std::string display = default_render_node(), streaming = vr_encode_node();
-	// (VAAPI can't take another card's desktop images; NVENC reads them back through the display's GPU)
-	return streaming != vr_render_node() && gpu_vendor(streaming) == 0x10de ? streaming : display;
+	// The display's GPU encodes straight from its own DMA-BUFs. Another card would need a readback and a CPU colour
+	// conversion per frame: a 3440x1440 desktop then reached only about 38 fps.
+	return default_render_node();
 }
 
 std::string vr_render_node()

@@ -625,7 +625,7 @@ QWidget * makeStreamingPage(Engine & engine)
 		          "The game keeps all of its card, frames are copied to the streaming card over PCIe.\n"
 		          "That copy needs a fast slot for the streaming card. Close VR games before changing this.");
 		auto * game = row(cards, "Game card", "VR games render here", picker(s.gameGpu, gpus_changed));
-		auto * streaming = row(cards, "Streaming card", "Encodes the video sent to the headset", picker(s.streamingGpu, gpus_changed));
+		auto * streaming = row(cards, "Streaming card", "Encodes VR games for the headset (the desktop stays on the display's card)", picker(s.streamingGpu, gpus_changed));
 		auto sync_enabled = [game, streaming] {
 			const bool on = StreamerSettings::instance().dualGpu;
 			game->setEnabled(on);

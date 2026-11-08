@@ -112,6 +112,9 @@ private:
 	std::thread encoder_thread;
 
 	int preset = 4; // NVENC p1..p7 (adaptive speed lowers it under load)
+	bool shed_two_pass = false; // adaptive speed: 2-pass off, at the fastest preset and short of time
+	double worst_encode = 0, longest_gap = 0;                      // this statistics window (ms)
+	std::chrono::steady_clock::time_point last_sent{};
 	double load_ms = 0;
 	int load_frames = 0;
 	std::chrono::steady_clock::time_point preset_changed{};
