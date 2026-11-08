@@ -50,6 +50,12 @@ On other distributions, [build from source](#build-from-source).
 - OpenXR VR games through the bundled OpenDesk XR runtime (native and Proton)
 - Face, eye and body tracking, and foveated streaming on headsets that support them
 
+## Desktop environments
+
+Desktop streaming currently relies mainly on **KDE Plasma on Wayland**, which is what it's developed and tested on.
+Other desktop environments and window managers are not tested. OpenDesk falls back to the screen-share portal or X11
+capture there, so it may work, but expect rough edges, and virtual monitors need KDE's KWin. Reports and fixes are welcome.
+
 ## Extra features
 
 Things OpenDesk adds on top of what the Windows streamer offers:
