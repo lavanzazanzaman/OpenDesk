@@ -57,16 +57,21 @@ namespace opendesk_openxr {
             return XR_ERROR_HANDLE_INVALID;
         }
 
-        const auto& vkFormats = supportedFormats();
-        const uint32_t count = m_isHeadless ? 0u : (uint32_t)vkFormats.size();
+        std::vector<int64_t> list;
+        if (isLinuxOpenGLSession()) {
+            list = linuxOpenGLFormats();
+        } else if (!m_isHeadless) {
+            for (VkFormat format : supportedFormats()) {
+                list.push_back((int64_t)format);
+            }
+        }
+        const uint32_t count = (uint32_t)list.size();
         if (formatCapacityInput && formatCapacityInput < count) {
             return XR_ERROR_SIZE_INSUFFICIENT;
         }
         *formatCountOutput = count;
         if (formatCapacityInput && formats) {
-            for (uint32_t i = 0; i < count; i++) {
-                formats[i] = (int64_t)vkFormats[i];
-            }
+            std::copy(list.begin(), list.end(), formats);
         }
         return XR_SUCCESS;
     }
@@ -92,7 +97,8 @@ namespace opendesk_openxr {
         }
 
         ovrTextureSwapChainDesc desc{};
-        desc.Format = vkToOvrTextureFormat((VkFormat)createInfo->format);
+        desc.Format = isLinuxOpenGLSession() ? linuxOpenGLToOvrFormat(createInfo->format)
+                                             : vkToOvrTextureFormat((VkFormat)createInfo->format);
         if (desc.Format == OVR_FORMAT_UNKNOWN) {
             return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
         }
@@ -123,7 +129,8 @@ namespace opendesk_openxr {
         }
         xrSwapchain.ovrDesc = desc;
         xrSwapchain.xrDesc = *createInfo;
-        xrSwapchain.isSRGB = isSRGB((VkFormat)createInfo->format);
+        xrSwapchain.isSRGB = desc.Format == OVR_FORMAT_R8G8B8A8_UNORM_SRGB || desc.Format == OVR_FORMAT_B8G8R8A8_UNORM_SRGB ||
+                             desc.Format == OVR_FORMAT_B8G8R8X8_UNORM_SRGB;
 
         *swapchain = (XrSwapchain)&xrSwapchain;
         {
@@ -149,6 +156,7 @@ namespace opendesk_openxr {
         }
 
         Swapchain& xrSwapchain = *(Swapchain*)swapchain;
+        cleanupSwapchainImagesLinuxOpenGL(xrSwapchain);
         cleanupSwapchainImagesVulkan(xrSwapchain);
         if (xrSwapchain.appSwapchain.ovrSwapchain) {
             ovr_DestroyTextureSwapChain(m_ovrSession, xrSwapchain.appSwapchain.ovrSwapchain);
@@ -174,6 +182,10 @@ namespace opendesk_openxr {
             return XR_ERROR_SIZE_INSUFFICIENT;
         }
         *imageCountOutput = count;
+        if (imageCapacityInput && images && isLinuxOpenGLSession()) {
+            return getSwapchainImagesLinuxOpenGL(
+                xrSwapchain, reinterpret_cast<XrSwapchainImageOpenGLKHR*>(images), *imageCountOutput);
+        }
         if (imageCapacityInput && images) {
             return getSwapchainImagesVulkan(
                 xrSwapchain, reinterpret_cast<XrSwapchainImageVulkanKHR*>(images), *imageCountOutput);

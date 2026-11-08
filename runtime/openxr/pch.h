@@ -96,6 +96,7 @@ using Microsoft::WRL::ComPtr;
 #define XR_NO_PROTOTYPES
 #define XR_USE_TIMESPEC
 #define XR_USE_GRAPHICS_API_VULKAN
+#define XR_USE_GRAPHICS_API_OPENGL // (the Xlib binding is declared in linux_opengl.cpp: no X11 macros in every file)
 #endif
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>

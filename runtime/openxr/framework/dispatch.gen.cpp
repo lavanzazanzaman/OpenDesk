@@ -1340,6 +1340,27 @@ namespace RUNTIME_NAMESPACE {
 		return result;
 	}
 
+	XrResult XRAPI_CALL xrGetOpenGLGraphicsRequirementsKHR(XrInstance instance, XrSystemId systemId, XrGraphicsRequirementsOpenGLKHR* graphicsRequirements) {
+		TraceLocalActivity(local);
+		TraceLoggingWriteStart(local, "xrGetOpenGLGraphicsRequirementsKHR");
+
+		XrResult result;
+		try {
+			result = RUNTIME_NAMESPACE::GetInstance()->xrGetOpenGLGraphicsRequirementsKHR(instance, systemId, graphicsRequirements);
+		} catch (std::exception& exc) {
+			TraceLoggingWriteTagged(local, "xrGetOpenGLGraphicsRequirementsKHR_Error", TLArg(exc.what(), "Error"));
+			ErrorLog("xrGetOpenGLGraphicsRequirementsKHR: %s\n", exc.what());
+			result = XR_ERROR_RUNTIME_FAILURE;
+		}
+
+		TraceLoggingWriteStop(local, "xrGetOpenGLGraphicsRequirementsKHR", TLArg(xr::ToCString(result), "Result"));
+		if (XR_FAILED(result)) {
+			ErrorLog("xrGetOpenGLGraphicsRequirementsKHR failed with %s\n", xr::ToCString(result));
+		}
+
+		return result;
+	}
+
 	XrResult XRAPI_CALL xrGetVulkanGraphicsRequirements2KHR(XrInstance instance, XrSystemId systemId, XrGraphicsRequirementsVulkanKHR* graphicsRequirements) {
 		TraceLocalActivity(local);
 		TraceLoggingWriteStart(local, "xrGetVulkanGraphicsRequirements2KHR");
@@ -2056,6 +2077,9 @@ namespace RUNTIME_NAMESPACE {
 		else if (has_XR_KHR_convert_timespec_time && apiName == "xrConvertTimeToTimespecTimeKHR") {
 			*function = reinterpret_cast<PFN_xrVoidFunction>(RUNTIME_NAMESPACE::xrConvertTimeToTimespecTimeKHR);
 		}
+		else if (has_XR_KHR_opengl_enable && apiName == "xrGetOpenGLGraphicsRequirementsKHR") {
+			*function = reinterpret_cast<PFN_xrVoidFunction>(RUNTIME_NAMESPACE::xrGetOpenGLGraphicsRequirementsKHR);
+		}
 		else if (has_XR_KHR_vulkan_enable2 && apiName == "xrCreateVulkanInstanceKHR") {
 			*function = reinterpret_cast<PFN_xrVoidFunction>(RUNTIME_NAMESPACE::xrCreateVulkanInstanceKHR);
 		}
@@ -2153,6 +2177,9 @@ namespace RUNTIME_NAMESPACE {
 		}
 		else if (extensionName == "XR_KHR_vulkan_enable") {
 			has_XR_KHR_vulkan_enable = true;
+		}
+		else if (extensionName == "XR_KHR_opengl_enable") {
+			has_XR_KHR_opengl_enable = true;
 		}
 		else if (extensionName == "XR_KHR_vulkan_enable2") {
 			has_XR_KHR_vulkan_enable2 = true;

@@ -285,6 +285,20 @@ if __import__("os").environ.get("ZERO_POSE"):  # a headset not tracking yet: all
         comp = lz4.block.compress(bytes(zero), store_size=False)
         data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
         time.sleep(0.05)
+if __import__("os").environ.get("RECENTER_TEST"):  # standing 1 m / 2 m off the origin, then the headset's own recenter moves the origin here
+    away = bytearray(fd)
+    struct.pack_into("<4f3f", away, 120, 0, 0, 0, 1, 1.0, 0.0, 2.0)
+    for i in range(60):
+        struct.pack_into("<i", away, 0, i)
+        comp = lz4.block.compress(bytes(away), store_size=False)
+        data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
+        time.sleep(0.05)
+    msg.sendall(writer.encode(bytes([29]) + (0).to_bytes(4, "big")))  # MessageType.Recenter
+    for i in range(30):
+        struct.pack_into("<i", fd, 0, 100 + i)
+        comp = lz4.block.compress(bytes(fd), store_size=False)
+        data_ch.send(len(comp).to_bytes(4, "little") + bytes(8) + comp)
+        time.sleep(0.05)
 comp = lz4.block.compress(bytes(fd), store_size=False)
 for i in range(10):
     struct.pack_into("<i", fd, 0, i)

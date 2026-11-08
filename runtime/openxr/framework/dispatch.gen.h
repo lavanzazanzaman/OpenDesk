@@ -105,6 +105,7 @@ namespace RUNTIME_NAMESPACE {
 		virtual XrResult xrCreateVulkanInstanceKHR(XrInstance instance, const XrVulkanInstanceCreateInfoKHR* createInfo, VkInstance* vulkanInstance, VkResult* vulkanResult) = 0;
 		virtual XrResult xrCreateVulkanDeviceKHR(XrInstance instance, const XrVulkanDeviceCreateInfoKHR* createInfo, VkDevice* vulkanDevice, VkResult* vulkanResult) = 0;
 		virtual XrResult xrGetVulkanGraphicsDevice2KHR(XrInstance instance, const XrVulkanGraphicsDeviceGetInfoKHR* getInfo, VkPhysicalDevice* vulkanPhysicalDevice) = 0;
+		virtual XrResult xrGetOpenGLGraphicsRequirementsKHR(XrInstance instance, XrSystemId systemId, XrGraphicsRequirementsOpenGLKHR* graphicsRequirements) = 0;
 		virtual XrResult xrGetVulkanGraphicsRequirements2KHR(XrInstance instance, XrSystemId systemId, XrGraphicsRequirementsVulkanKHR* graphicsRequirements) = 0;
 		virtual XrResult xrLocateSpacesKHR(XrSession session, const XrSpacesLocateInfo* locateInfo, XrSpaceLocations* spaceLocations) = 0;
 		virtual XrResult xrCreateHandTrackerEXT(XrSession session, const XrHandTrackerCreateInfoEXT* createInfo, XrHandTrackerEXT* handTracker) = 0;
@@ -138,6 +139,7 @@ namespace RUNTIME_NAMESPACE {
 
 		// Auto-generated extension properties.
 		bool has_XR_KHR_vulkan_enable{false};
+		bool has_XR_KHR_opengl_enable{false};
 		bool has_XR_KHR_vulkan_enable2{false};
 		bool has_XR_KHR_composition_layer_depth{false};
 		bool has_XR_KHR_composition_layer_cylinder{false};

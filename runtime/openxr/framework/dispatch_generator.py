@@ -49,7 +49,7 @@ SPECIAL_API = ['xrDestroyInstance']
 # We rewrite the trampoline and prototype for these
 VERY_SPECIAL_API = ['xrGetInstanceProperties']
 # Linux: Vulkan only; no win32 time, no Oculus audio device GUIDs
-EXTENSIONS = ['XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2',
+EXTENSIONS = ['XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2', 'XR_KHR_opengl_enable',
               'XR_KHR_composition_layer_depth', 'XR_KHR_composition_layer_cylinder', 'XR_KHR_composition_layer_cube', 'XR_KHR_visibility_mask',
               'XR_KHR_convert_timespec_time', 'XR_FB_display_refresh_rate', 'XR_EXT_hand_tracking', 'XR_EXT_hand_tracking_data_source',
               'XR_EXT_eye_gaze_interaction', 'XR_EXT_uuid', 'XR_META_headset_id', 'XR_MND_headless',
@@ -57,7 +57,7 @@ EXTENSIONS = ['XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2',
               'XR_FB_body_tracking', 'XR_META_body_tracking_full_body', 'XR_META_body_tracking_fidelity', 'XR_META_body_tracking_calibration', 'XR_HTCX_vive_tracker_interaction',
               'XR_EXT_active_action_set_priority', 'XR_KHR_locate_spaces', 'XR_KHR_maintenance1', 'XR_EXT_local_floor', 'XR_EXT_palm_pose']
 if windows:
-    EXTENSIONS = ['XR_KHR_D3D11_enable', 'XR_KHR_D3D12_enable', 'XR_KHR_opengl_enable', 'XR_KHR_win32_convert_performance_counter_time',
+    EXTENSIONS = ['XR_KHR_D3D11_enable', 'XR_KHR_D3D12_enable', 'XR_KHR_win32_convert_performance_counter_time',
                   'XR_OCULUS_audio_device_guid'] + EXTENSIONS
 
 SILENT_ERRORS = {

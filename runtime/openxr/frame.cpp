@@ -435,6 +435,9 @@ namespace opendesk_openxr {
             }
 
 #else
+            if (isLinuxOpenGLSession()) {
+                finishLinuxOpenGLFrame(); // everything the app drew has landed in the shared images
+            }
             if (isVulkanSession()) {
                 serializeVulkanFrame();
             }
@@ -481,12 +484,14 @@ namespace opendesk_openxr {
 
                 m_precompositor.layerIndex = i;
 
-#ifdef _WIN32
                 // OpenGL needs to flip the texture vertically, which OVR can conveniently do for us.
+#ifdef _WIN32
                 if (isOpenGLSession()) {
+#else
+                if (isLinuxOpenGLSession()) {
+#endif
                     layer.Header.Flags = ovrLayerFlag_TextureOriginAtBottomLeft;
                 }
-#endif
 
                 if (frameEndInfo->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
                     const XrCompositionLayerProjection* proj =

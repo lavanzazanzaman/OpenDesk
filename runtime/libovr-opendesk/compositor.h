@@ -50,6 +50,7 @@ struct swapchain
 	bool depth = false;
 	std::vector<VkImage> images;          // on the app's device (what the app renders into)
 	std::vector<VkDeviceMemory> memory;
+	std::vector<uint64_t> memory_size;    // of each entry in `memory`
 	std::vector<VkImage> shared;          // the same memory on the compositor's device (color only)
 	std::vector<VkDeviceMemory> shared_memory;
 	std::vector<std::vector<VkImageView>> views; // [image][array layer] of `shared`
@@ -112,6 +113,9 @@ public:
 	std::unique_ptr<swapchain> create_swapchain(VkFormat, uint32_t width, uint32_t height, uint32_t array_size,
 	                                            uint32_t mip_levels, uint32_t sample_count, uint32_t image_count, bool depth, bool cube = false);
 	void destroy_swapchain(swapchain &);
+#ifndef _WIN32
+	int export_memory(const swapchain & sc, size_t index); // a new fd for the image's memory (color images only)
+#endif
 
 	// composites into the client's slot images; blocks until the GPU finished. eye_pose: the frame's render poses
 	// (tracking space) - quads are placed relative to them. stream_fov: left, right, up, down per eye.

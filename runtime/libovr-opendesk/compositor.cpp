@@ -694,6 +694,7 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 		vkBindImageMemory(app_device, img, mem, 0);
 		sc->images.push_back(img);
 		sc->memory.push_back(mem);
+		sc->memory_size.push_back(req.size);
 		std::vector<VkImageView> views;
 		if (!depth)
 		{
@@ -772,6 +773,18 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 	        &ctx);
 	return sc;
 }
+
+#ifndef _WIN32
+int compositor::export_memory(const swapchain & sc, size_t index)
+{
+	VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+	gfi.memory = sc.memory[index];
+	gfi.handleType = opaque_memory;
+	int fd = -1;
+	check(get_memory_fd(app_device, &gfi, &fd), "export swapchain memory for OpenGL");
+	return fd;
+}
+#endif
 
 void compositor::destroy_swapchain(swapchain & sc)
 {

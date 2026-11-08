@@ -257,11 +257,9 @@ namespace opendesk_openxr {
         XrResult xrGetVulkanGraphicsRequirements2KHR(XrInstance instance,
                                                      XrSystemId systemId,
                                                      XrGraphicsRequirementsVulkanKHR* graphicsRequirements) override;
-#ifdef _WIN32
         XrResult xrGetOpenGLGraphicsRequirementsKHR(XrInstance instance,
                                                     XrSystemId systemId,
                                                     XrGraphicsRequirementsOpenGLKHR* graphicsRequirements) override;
-#endif
         XrResult xrEnumerateDisplayRefreshRatesFB(XrSession session,
                                                   uint32_t displayRefreshRateCapacityInput,
                                                   uint32_t* displayRefreshRateCountOutput,
@@ -401,6 +399,8 @@ namespace opendesk_openxr {
             uint32_t nextIndex{0};
             bool frozen{false};
             std::vector<VkImage> vkImages;
+            std::vector<unsigned> glMemory; // OpenGL session (linux_opengl.cpp): the images as OpenGL sees them
+            std::vector<unsigned> glImages;
             XrSwapchainCreateInfo xrDesc;
             bool isSRGB{false};
             ovrTextureSwapChainDesc ovrDesc;
@@ -672,6 +672,19 @@ namespace opendesk_openxr {
         void flushVulkanCommandQueue();
         void serializeVulkanFrame();
 
+#ifndef _WIN32
+        // linux_opengl.cpp: GL renders into the swapchains of a private Vulkan device (a Vulkan session underneath)
+        struct LinuxOpenGL;
+        std::shared_ptr<LinuxOpenGL> m_linuxGl;
+        XrResult initializeLinuxOpenGL(const XrBaseInStructure& xlibBinding);
+        bool isLinuxOpenGLSession() const;
+        void endLinuxOpenGLSession();
+        std::vector<int64_t> linuxOpenGLFormats() const;
+        ovrTextureFormat linuxOpenGLToOvrFormat(int64_t format) const;
+        XrResult getSwapchainImagesLinuxOpenGL(Swapchain& xrSwapchain, XrSwapchainImageOpenGLKHR* glImages, uint32_t count);
+        void cleanupSwapchainImagesLinuxOpenGL(Swapchain& xrSwapchain);
+        void finishLinuxOpenGLFrame();
+#endif
 #ifdef _WIN32
         // opengl_interop.cpp
         XrResult initializeOpenGL(const XrGraphicsBindingOpenGLWin32KHR& glBindings);

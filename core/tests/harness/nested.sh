@@ -61,7 +61,7 @@ if [ -n "${OPENDESK_TEST_XRIZER_ZIP:-}" ]; then
 	printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { cp "%s" "$2"; exit 0; }; shift; done\nexit 1\n' "$OPENDESK_TEST_XRIZER_ZIP" > $W/bin/curl
 	chmod +x $W/bin/curl
 fi
-FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
+FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
  "VideosRootPath": "$W/videos"${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}}
@@ -113,6 +113,12 @@ sleep 2
 # AUTOXR: like AUTOVR with hello_xr - an OpenXR app renders nothing until visible, so the streamer has to switch the
 # headset to VR on its frame loop, not on a submitted frame
 [ "$SCENARIO" = AUTOXR ] && (sleep 4; $R/build/core/vr-test-client 1 probe; $R/build/core/vr-test-client 1 probe; sleep 7; sleep 12 | timeout 12 hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1) &
+# OPENVRGL: an OpenVR game rendering with OpenGL (Vivecraft's path): needs an X server for GLX
+if [ "$SCENARIO" = OPENVRGL ]; then
+	Xwayland :79 -geometry 1280x720 -noreset -nolisten unix >$W/xwayland.log 2>&1 &
+	for i in \$(seq 50); do DISPLAY=:79 xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
+	(sleep 3; DISPLAY=:79 OPENDESK_OPENVR_API=$OPENVR_API $R/build/core/openvr-gl 12 > $W/client.out 2>&1) &
+fi
 [ "$SCENARIO" = OPENVRRENDER ] && (sleep 3; OPENDESK_OPENVR_API=$OPENVR_API $R/build/core/openvr-render 12 > $W/client.out 2>&1) &
 [ "$SCENARIO" = PROTONVR ] && (sleep 3; mkdir -p $R/build/checks/proton-prefix; STEAM_COMPAT_DATA_PATH=$R/build/checks/proton-prefix STEAM_COMPAT_CLIENT_INSTALL_PATH=\$HOME/.local/share/Steam SteamAppId=${OPENDESK_TEST_STEAM_APPID:-0} SteamGameId=${OPENDESK_TEST_STEAM_APPID:-0} PROTON_LOG=1 PROTON_LOG_DIR=$W timeout 40 "$TEST_PROTON" run "${OPENDESK_TEST_WINDOWS_EXE:-$R/build/checks/legacy-bin/legacy-openvr.exe}" ${OPENDESK_TEST_WINDOWS_ARGS:-12} > $W/client.out 2>&1) &
 # OPENVR: an OpenVR app through the registered runtime (xrizer copy -> OpenDesk XR); records the registration
@@ -124,6 +130,12 @@ sleep 2
 [ "$SCENARIO" = XREXIT ] && ($R/build/runtime/xr-exit-test > $W/client.out 2>&1; $R/build/runtime/xr-exit-test headless >> $W/client.out 2>&1 &)
 # HELLOXR_HIDE_RUNTIME_DIR=1: the app gets another $XDG_RUNTIME_DIR (like Steam's pressure-vessel) -> abstract socket
 [ -n "$HELLOXR_HIDE_RUNTIME_DIR" ] && APP_ENV="XDG_RUNTIME_DIR=$RT/app" && mkdir -p $RT/app
+# HELLOXR_GFX=OpenGL: the app needs an X server (GLX); the streamer stays on Wayland
+if [ "$SCENARIO" = HELLOXR ] && [ "${HELLOXR_GFX:-}" = OpenGL ]; then
+	Xwayland :78 -geometry 1280x720 -noreset -nolisten unix >$W/xwayland.log 2>&1 &
+	for i in \$(seq 50); do DISPLAY=:78 xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
+	APP_ENV="\$APP_ENV DISPLAY=:78"
+fi
 [ "$SCENARIO" = HELLOXR ] && (sleep 25 | env \$APP_ENV OPENDESK_OVR_LOG=1 timeout 25 hello_xr -g ${HELLOXR_GFX:-Vulkan2} -vc Stereo > $W/client.out 2>&1 &)
 # FOVEATED: an eye-tracked headset streaming foveated (4 streams, gaze on the video connection) while hello_xr renders
 [ "$SCENARIO" = FOVEATED ] && (sleep 30 | timeout 30 hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &)

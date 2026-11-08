@@ -217,6 +217,7 @@ struct session_state
 	bool centered = false;
 	bool should_recenter = false;
 	uint32_t recenter_serial = 0;
+	double recenter_at = 0; // when to apply the headset's recenter (0: none pending)
 
 	double period = 1.0 / 72;
 	double next_frame = 0;
@@ -246,15 +247,23 @@ struct session_state
 			return;
 		client->poll(0);
 		client->read_state(state);
+		state_time = now_seconds();
 		if (recenter_serial != state.settings.recenter_serial) {
 			recenter_serial = state.settings.recenter_serial;
-			should_recenter = true;
+			recenter_at = state_time + 0.1; // the headset's own recenter: its next poses are in the moved space
 		}
-		state_time = now_seconds();
 		if (state.frame_period_ns > 0)
 			period = double(state.frame_period_ns) * 1e-9;
 		if (!centered && state.frame_data_time_ns)
 			recenter(false);
+		// The headset's recenter moved its tracking origin, so the offset kept from the last centring is stale: without
+		// this the player ended up that far away from the game's centre. Then tell the app its spaces moved.
+		if (recenter_at > 0 && state_time >= recenter_at)
+		{
+			recenter_at = 0;
+			if (recenter(false))
+				should_recenter = true;
+		}
 	}
 
 	frame_data::pose raw_head() const { return frame_data::head(state.frame_data); }
@@ -275,7 +284,8 @@ struct session_state
 		float height = keep_height ? center[1] : h.position[1];
 		center = {h.position[0], height, h.position[2]};
 		centered = true;
-		report("recentered: forward = headset yaw %.0f degrees", double(center_yaw) * 180.0 / 3.14159265358979);
+		report("recentered: forward = headset yaw %.0f degrees, position (%.2f, %.2f)", double(center_yaw) * 180.0 / 3.14159265358979, double(center[0]),
+		       double(center[2]));
 		return true;
 	}
 
@@ -924,6 +934,9 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_BeginFrame(ovrSession session, long long)
 		// Apps render nothing until visible, and visible needs VR mode - so this can't wait for a submitted frame.
 		s->client->announce_rendering();
 		s->announced_rendering = true;
+		// the game's first frame: where the player stands now is the spawn point, not where they stood when the game
+		// attached to the runtime (it may have loaded for minutes, or started from the desktop with the headset elsewhere)
+		s->recenter(false);
 	}
 	return ovrSuccess;
 }
@@ -1190,6 +1203,27 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_CommitTextureSwapChain(ovrSession, ovrTexture
 }
 
 // libovr-opendesk extension: commit a given image (OpenDesk XR keeps its own OpenXR image index)
+#ifndef _WIN32
+OVRVD_EXPORT ovrResult ovrvd_ExportTextureSwapChainMemory(ovrSession session, ovrTextureSwapChain chain, int index, int * fd, uint64_t * size)
+{
+	auto * s = S(session);
+	std::lock_guard lock(s->mutex);
+	auto * c = reinterpret_cast<texture_chain *>(chain);
+	if (!s->comp || !c || !fd || !size || index < 0 || size_t(index) >= c->images->memory.size() || c->images->depth)
+		return ovrError_InvalidParameter;
+	try
+	{
+		*fd = s->comp->export_memory(*c->images, size_t(index));
+		*size = c->images->memory_size[size_t(index)];
+		return ovrSuccess;
+	}
+	catch (const std::exception & e)
+	{
+		return fail(ovrError_RuntimeException, e.what());
+	}
+}
+#endif
+
 OVRVD_EXPORT ovrResult ovrvd_CommitTextureSwapChainIndex(ovrSession, ovrTextureSwapChain chain, int index)
 {
 	auto * c = reinterpret_cast<texture_chain *>(chain);

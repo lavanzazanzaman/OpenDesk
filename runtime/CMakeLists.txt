@@ -159,7 +159,7 @@ add_library(opendesk-openxr SHARED
     openxr/log.cpp openxr/instance.cpp openxr/system.cpp openxr/session.cpp openxr/space.cpp openxr/action.cpp openxr/mappings.cpp
     openxr/frame.cpp openxr/swapchain.cpp openxr/vulkan_interop.cpp openxr/hand_tracking.cpp openxr/eye_tracking.cpp
     openxr/face_tracking.cpp openxr/body_tracking.cpp openxr/visibility_mask.cpp openxr/display_refresh_rate.cpp openxr/pch.cpp
-    openxr/linux_bodystate.cpp openxr/perf_counter.cpp openxr/linux_graphics.cpp
+    openxr/linux_bodystate.cpp openxr/perf_counter.cpp openxr/linux_graphics.cpp openxr/linux_opengl.cpp
     ${OPENDESK_XR_EXTERNAL}/cJSON/cJSON.c
     ${OPENDESK_XR_EXTERNAL}/openvr/samples/drivers/drivers/handskeletonsimulation/src/hand_simulation.cpp)
 target_include_directories(opendesk-openxr PRIVATE openxr openxr/framework ${CMAKE_SOURCE_DIR}/third_party ${CMAKE_CURRENT_BINARY_DIR}/generated ${OPENDESK_XR_EXTERNAL}/cJSON

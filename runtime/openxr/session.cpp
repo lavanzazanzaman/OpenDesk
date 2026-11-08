@@ -132,6 +132,19 @@ namespace opendesk_openxr {
                 break;
 #endif
             }
+#ifndef _WIN32
+            if (has_XR_KHR_opengl_enable && entry->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR) {
+                if (!m_graphicsRequirementQueried) {
+                    return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
+                }
+                const auto result = initializeLinuxOpenGL(*entry);
+                if (XR_FAILED(result)) {
+                    return result;
+                }
+                hasGraphicsBindings = true;
+                break;
+            }
+#endif
 
             entry = entry->next;
         }
@@ -309,6 +322,8 @@ namespace opendesk_openxr {
         m_accessibilityHelper.reset();
 #ifdef _WIN32
         cleanupOpenGL();
+#else
+        endLinuxOpenGLSession();
 #endif
         cleanupVulkan();
 #ifdef _WIN32
