@@ -65,7 +65,7 @@ if [ -n "${OPENDESK_TEST_XRIZER_ZIP:-}" ]; then
 fi
 FAKE=$SCENARIO; case $SCENARIO in VRCLIENT|OVRAPP|HELLOXR|OPENVRRENDER|OPENVRGL|PROTONVR|XROVERLAY|XROVERLAYFIRST|XROVERLAYALONE) FAKE=VR;; XREXIT|OPENVR|XRBODY|XRMASK|XRPOSE) FAKE=MONITORS;; X11) FAKE=X11;; AUTOXR) FAKE=AUTOVR;; esac
 cat > $W/config/OpenDesk/streamer.json <<J
-{"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": 0, "StartMinimized": true,
+{"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": ${AUDIO_TEST_MODE:-0}, "StartMinimized": true,
  "VideosRootPath": "$W/videos"${OPENDESK_TEST_HAND_POSE:+, \"HandPose\": $OPENDESK_TEST_HAND_POSE}${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_TWO_PASS:+, \"Enable2Pass\": true}${OPENDESK_TEST_AMD_SPEED:+, \"AmdEncoderSpeed\": $OPENDESK_TEST_AMD_SPEED}${OPENDESK_TEST_QPA:+, \"StartMinimized\": false, \"StartMinimizedInTray\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
 J
 rm -f $W/config/OpenDesk/engine.json
@@ -92,11 +92,30 @@ cat > $W/inner.sh <<I
 #!/bin/bash
 export XDG_DATA_HOME=$W/share XDG_CACHE_HOME=$W/cache XDG_CONFIG_HOME=$W/config XDG_STATE_HOME=$W/state
 unset WAYLAND_DISPLAY DISPLAY
+# AUDIO_TEST_MODE=0/1/2 (AudioStreaming, with extra argument AUDIO_PROBE=1): a private audio server with no real devices, a
+# null sink "speaker" as the PC's output and a tone playing on it
+if [ -n "${AUDIO_TEST_MODE:-}" ]; then
+	export PIPEWIRE_RUNTIME_DIR=$RT PULSE_RUNTIME_PATH=$RT/pulse
+	mkdir -p $W/config/wireplumber/wireplumber.conf.d
+	echo 'wireplumber.profiles = { main = { monitor.alsa = disabled, monitor.alsa-midi = disabled, monitor.bluez = disabled, monitor.bluez-midi = disabled, monitor.libcamera = disabled, monitor.v4l2 = disabled, hooks.device.profile.state = disabled } }' > $W/config/wireplumber/wireplumber.conf.d/off.conf
+	timeout 90 pipewire > $W/pw.log 2>&1 &
+	sleep 1.5
+	timeout 90 pipewire-pulse > $W/pp.log 2>&1 &
+	timeout 90 wireplumber > $W/wp.log 2>&1 &
+	sleep 2.5
+fi
 kbuildsycoca6 >/dev/null 2>&1
 kwin_wayland --virtual --no-lockscreen --no-global-shortcuts --socket vdnest --width 1600 --height 900 >$W/kwin.log 2>&1 &
 K=\$!
 for i in \$(seq 50); do [ -S /run/user/\$(id -u)/vdnest ] && break; sleep 0.1; done
 export XDG_RUNTIME_DIR=$RT WAYLAND_DISPLAY=/run/user/1000/vdnest PIPEWIRE_RUNTIME_DIR=/run/user/1000 PULSE_SERVER=unix:/run/user/1000/pulse/native
+if [ -n "${AUDIO_TEST_MODE:-}" ]; then
+	export PIPEWIRE_RUNTIME_DIR=$RT PULSE_SERVER=unix:$RT/pulse/native
+	pactl load-module module-null-sink sink_name=speaker rate=48000 channels=2 > /dev/null
+	pactl set-default-sink speaker
+	python3 -I -c "import math,struct; open('$W/tone.raw','wb').write(b''.join(struct.pack('<hh',t,t) for t in (int(12000*math.sin(i*2*math.pi*440/48000)) for i in range(48000*60))))"
+	(timeout 60 pacat --playback --raw --format=s16le --rate=48000 --channels=2 $W/tone.raw &)
+fi
 [ "$SCENARIO" = VR ] && export OPENDESK_VR_TEST_PATTERN=1
 # X11: an X server of its own (abstract socket only: nothing in the real /tmp/.X11-unix), a blue root window
 if [ "$SCENARIO" = X11 ]; then
@@ -156,6 +175,7 @@ OVERLAY="${WAYVR:-$R/build/runtime/xr-overlay-test 60 ${OVERLAY_ALPHA:-1}}"
 [ "$SCENARIO" = REJOIN ] && (sleep 30 | timeout 30 hello_xr -g Vulkan2 -vc Stereo > $W/client.out 2>&1 &)
 env NOAUDIO=1 HOLD=1 VR_DUMP=$W/vr VR_DUMP_FOVEA=$W/fovea.txt $FAKE=1 ${@:3} $R/engine/.venv/bin/python $R/core/tests/fake_headset.py testacct > >(tee $W/fake.out)
 rc=\$?
+[ -n "${AUDIO_TEST_MODE:-}" ] && sleep 2 && echo "AFTER default_sink=\$(pactl get-default-sink) sinks=\$(pactl list short sinks | cut -f2 | tr '\\n' ' ') sources=\$(pactl list short sources | cut -f2 | tr '\\n' ' ')"
 if [ "$SCENARIO" = REJOIN ]; then
 	sleep 3
 	env NOAUDIO=1 HOLD=1 VR_DUMP=$W/vr2 REJOIN=1 $R/engine/.venv/bin/python $R/core/tests/fake_headset.py testacct || rc=1

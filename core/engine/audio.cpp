@@ -131,7 +131,7 @@ void mic_player::run()
 		{
 			pa_sample_spec spec{PA_SAMPLE_S16LE, rate, 1};
 			int err = 0;
-			pa = pa_simple_new(nullptr, "OpenDesk Streamer", PA_STREAM_PLAYBACK, "opendesk_mic", "headset microphone",
+			pa = pa_simple_new(nullptr, "OpenDesk Streamer", PA_STREAM_PLAYBACK, "opendesk_mic_feed", "headset microphone",
 			                   &spec, nullptr, nullptr, &err);
 			if (!pa)
 			{

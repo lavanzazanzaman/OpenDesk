@@ -41,7 +41,7 @@ private:
 class mic_player
 {
 public:
-	// plays into the PipeWire source "opendesk_mic" (created by the engine); gain = lerp(0.1, 2, MicVolume) as on Windows
+	// plays into the sink "opendesk_mic_feed", which the input device "opendesk_mic" records (created by the engine); gain = lerp(0.1, 2, MicVolume) as on Windows
 	explicit mic_player(float mic_volume);
 	~mic_player();
 	void push(const uint8_t * pcm, size_t size);

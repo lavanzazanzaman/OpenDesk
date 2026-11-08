@@ -15,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -88,6 +89,11 @@ public:
 	std::unique_ptr<swapchain> import_foreign(const ipc::link_swapchain &, const std::vector<int> & fds);
 	// overlay app: hands an image to / takes it back from the game that samples it (waits for the app's rendering)
 	void hand_over(swapchain &, size_t image, bool to_game);
+	// the same without waiting: queues the hand-overs behind the app's rendering. wait_hand_over (any thread) returns once
+	// the GPU got there. -1: nothing had to change hands.
+	using image_ref = std::pair<swapchain *, size_t>;
+	int hand_over_async(const std::vector<image_ref> & to_game, const std::vector<image_ref> & back);
+	void wait_hand_over(int ticket);
 	int export_memory(const swapchain & sc, size_t index); // a new fd for the image's memory (color images only)
 
 	// composites into the client's slot images; blocks until the GPU finished. eye_pose: the frame's render poses
@@ -126,6 +132,14 @@ private:
 	// GPU-side synchronisation with the app's queue (no CPU waits in ovr_EndFrame): per slot, a semaphore pair shared
 	// between the app's device and ours (OPAQUE_FD) plus our own command buffers, fences and descriptor pool, so frames
 	// in flight never share objects. A slot is reused only after the streamer released it, i.e. after its GPU work.
+	static constexpr int hand_over_tickets = 8;
+	struct hand_over_ticket
+	{
+		VkCommandBuffer cmd = VK_NULL_HANDLE;
+		VkFence fence = VK_NULL_HANDLE;
+	} tickets[hand_over_tickets];
+	int next_ticket = 0;
+
 	struct frame_slot
 	{
 		VkCommandBuffer app_release = VK_NULL_HANDLE, app_acquire = VK_NULL_HANDLE, cmd = VK_NULL_HANDLE;

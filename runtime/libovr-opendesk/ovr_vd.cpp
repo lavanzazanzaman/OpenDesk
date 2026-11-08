@@ -17,9 +17,11 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <memory>
+#include <poll.h>
 #include <cstddef>
 #include <sys/socket.h>
 #include <map>
@@ -192,6 +194,74 @@ private:
 	std::thread thread;
 };
 
+// overlay app: its layer list goes to the game once the GPU has finished the frame, without holding up the app's thread
+class overlay_sender
+{
+public:
+	~overlay_sender()
+	{
+		{
+			std::lock_guard lock(m);
+			stop = true;
+		}
+		cv.notify_all();
+		if (thread.joinable())
+			thread.join();
+	}
+	void push(compositor * comp, int ticket, int link, std::vector<uint8_t> message)
+	{
+		std::unique_lock lock(m);
+		if (!thread.joinable())
+			thread = std::thread([this] { run(); });
+		// (the ticket ring is longer than this: a ticket is never reused while it's being waited for)
+		cv.wait(lock, [&] { return queued - done < 4 || stop; });
+		queue.push_back({comp, ticket, link, std::move(message)});
+		++queued;
+		cv.notify_all();
+	}
+	void drain()
+	{
+		std::unique_lock lock(m);
+		cv.wait(lock, [&] { return done == queued || stop; });
+	}
+
+private:
+	struct job
+	{
+		compositor * comp;
+		int ticket, link;
+		std::vector<uint8_t> message;
+	};
+	void run()
+	{
+		for (;;)
+		{
+			job j;
+			{
+				std::unique_lock lock(m);
+				cv.wait(lock, [&] { return stop || !queue.empty(); });
+				if (stop)
+					return;
+				j = std::move(queue.front());
+				queue.pop_front();
+			}
+			j.comp->wait_hand_over(j.ticket);
+			send(j.link, j.message.data(), j.message.size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+			{
+				std::lock_guard lock(m);
+				++done;
+			}
+			cv.notify_all();
+		}
+	}
+	std::mutex m;
+	std::condition_variable cv;
+	std::deque<job> queue;
+	uint64_t queued = 0, done = 0;
+	bool stop = false;
+	std::thread thread;
+};
+
 struct session_state
 {
 	std::unique_ptr<vr_client> client;
@@ -223,6 +293,7 @@ struct session_state
 	uint32_t vk_family = 0;
 	std::unique_ptr<compositor> comp;
 	frame_submitter submitter; // after comp and client: stops before they go away
+	overlay_sender guest_sender; // (the same)
 	float vibration[2] = {0, 0};
 	uint64_t dropped = 0; // frames dropped for want of a free stream slot
 
@@ -233,6 +304,11 @@ struct session_state
 	std::map<swapchain *, uint32_t> guest_chains; // overlay app: announced over that link
 	uint32_t guest_next_id = 1;
 	bool guest_warned_projection = false;
+	// OPENDESK_OVERLAY_STATS=1: per game frame, how many overlay updates arrived; what submitting costs the overlay
+	const bool overlay_stats = std::getenv("OPENDESK_OVERLAY_STATS") != nullptr;
+	uint64_t stat_frames = 0, stat_updates[3] = {};
+	double stat_block = 0, stat_block_max = 0;
+	uint64_t stat_guest_frames = 0;
 	struct hosted_overlay
 	{
 		int link = -1;
@@ -243,6 +319,7 @@ struct session_state
 
 	void end_guest_link()
 	{
+		guest_sender.drain();
 		close(overlay_guest);
 		overlay_guest = -1;
 		for (auto & [sc, id]: guest_chains)
@@ -355,13 +432,19 @@ struct session_state
 			if (std::find(shown.begin(), shown.end(), sc) == shown.end())
 				shown.push_back(sc);
 		}
+		// the shown images go to the game; the image the app renders into next comes back (a static image never does: it
+		// is not rendered again). On the app's queue behind its rendering: this thread goes straight on to the next frame.
+		std::vector<compositor::image_ref> to_game, back;
 		for (swapchain * sc: shown)
-			comp->hand_over(*sc, size_t(sc->committed), true);
-		send(overlay_guest, &out, offsetof(ipc::link_layers, layer) + sizeof(ipc::link_layer) * out.count, MSG_DONTWAIT | MSG_NOSIGNAL);
-		// the image the app renders into next comes back (a static image never does: it is not rendered again)
-		for (swapchain * sc: shown)
+		{
+			to_game.emplace_back(sc, size_t(sc->committed));
 			if (sc->images.size() > 1)
-				comp->hand_over(*sc, (size_t(sc->committed) + 1) % sc->images.size(), false);
+				back.emplace_back(sc, (size_t(sc->committed) + 1) % sc->images.size());
+		}
+		const size_t bytes = offsetof(ipc::link_layers, layer) + sizeof(ipc::link_layer) * out.count;
+		std::vector<uint8_t> message(bytes);
+		std::memcpy(message.data(), &out, bytes);
+		guest_sender.push(comp.get(), comp->hand_over_async(to_game, back), overlay_guest, std::move(message));
 	}
 
 	// game: what the overlays sent since the last frame; their layers go on top of the game's
@@ -371,6 +454,7 @@ struct session_state
 		{
 			auto & h = overlay_hosts[index];
 			bool alive = true;
+			int updates = 0;
 			for (int budget = 256; budget > 0; --budget)
 			{
 				alignas(8) uint8_t buf[sizeof(ipc::link_layers)];
@@ -434,6 +518,7 @@ struct session_state
 						std::memcpy(&d, buf, size_t(n));
 						const uint32_t count = std::min<uint32_t>(d.count, uint32_t((size_t(n) - offsetof(ipc::link_layers, layer)) / sizeof(ipc::link_layer)));
 						h.layers.assign(d.layer, d.layer + std::min(count, ipc::link_max_layers));
+						++updates;
 					}
 				}
 			}
@@ -445,6 +530,17 @@ struct session_state
 				overlay_hosts.erase(overlay_hosts.begin() + std::ptrdiff_t(index));
 				continue;
 			}
+			if (overlay_stats)
+			{
+				++stat_updates[std::min(updates, 2)];
+				if (++stat_frames == 400)
+				{
+					report("overlay stats: of 400 game frames, %llu had no overlay update, %llu one, %llu several", (unsigned long long)stat_updates[0],
+					       (unsigned long long)stat_updates[1], (unsigned long long)stat_updates[2]);
+					stat_frames = stat_updates[0] = stat_updates[1] = stat_updates[2] = 0;
+				}
+			}
+			send(h.link, "t", 1, MSG_DONTWAIT | MSG_NOSIGNAL); // the overlay's clock: it renders one frame per game frame
 			for (const auto & o: h.layers)
 			{
 				auto it = h.chains.find(o.chain);
@@ -1167,6 +1263,31 @@ OVR_PUBLIC_FUNCTION(double) ovr_GetPredictedDisplayTime(ovrSession session, long
 OVR_PUBLIC_FUNCTION(ovrResult) ovr_WaitToBeginFrame(ovrSession session, long long)
 {
 	auto * s = S(session);
+	// an overlay drawn into a game follows the game's frames (a clock of its own would drift against them: some game
+	// frames with no overlay update, some with two). A stalled game doesn't stop it for long.
+	int link;
+	double frame;
+	{
+		std::lock_guard lock(s->mutex);
+		s->refresh();
+		link = s->overlay_guest;
+		frame = s->period;
+	}
+	if (link >= 0)
+	{
+		pollfd p{link, POLLIN, 0};
+		::poll(&p, 1, int(std::ceil(frame * 2000)));
+		std::lock_guard lock(s->mutex);
+		if (s->overlay_guest == link)
+		{
+			char tick;
+			while (recv(link, &tick, 1, MSG_DONTWAIT) > 0)
+			{
+			}
+			s->next_frame = now_seconds() + s->period;
+			return ovrSuccess;
+		}
+	}
 	double wake;
 	{
 		std::lock_guard lock(s->mutex);
@@ -1492,6 +1613,7 @@ OVR_PUBLIC_FUNCTION(void) ovr_DestroyTextureSwapChain(ovrSession session, ovrTex
 		return;
 	auto * s = S(session);
 	std::lock_guard lock(s->mutex);
+	s->guest_sender.drain();
 	if (auto known = s->guest_chains.find(c->images.get()); known != s->guest_chains.end())
 	{
 		ipc::link_destroy d;
@@ -1655,7 +1777,20 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 	{
 		try
 		{
+			const double t0 = now_seconds();
 			s->forward_layers(list);
+			if (s->overlay_stats)
+			{
+				const double took = (now_seconds() - t0) * 1000;
+				s->stat_block += took;
+				s->stat_block_max = std::max(s->stat_block_max, took);
+				if (++s->stat_guest_frames == 400)
+				{
+					report("overlay stats: submitting took %.2f ms on average, %.2f ms at worst", s->stat_block / 400, s->stat_block_max);
+					s->stat_guest_frames = 0;
+					s->stat_block = s->stat_block_max = 0;
+				}
+			}
 		}
 		catch (const std::exception & e)
 		{

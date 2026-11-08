@@ -147,7 +147,7 @@ struct native_engine::session
 	qint64 started_ms = 0;
 	pulse_client * pulse = nullptr;
 	// audio routing to undo when the session ends (or the mode changes)
-	std::optional<uint32_t> audio_sink_module, mic_module;
+	std::optional<uint32_t> audio_sink_module, mic_module, mic_feed_module;
 	std::string restore_sink, unmute_sink, restore_source;
 	std::unique_ptr<aes_stream_reader> reader;
 	std::unique_ptr<aes_stream_writer> writer;
@@ -212,6 +212,8 @@ struct native_engine::session
 			pulse->set_default_source(std::exchange(restore_source, {}));
 		if (mic_module)
 			pulse->unload_module(*std::exchange(mic_module, std::nullopt));
+		if (mic_feed_module)
+			pulse->unload_module(*std::exchange(mic_feed_module, std::nullopt));
 	}
 	~session()
 	{
@@ -2291,7 +2293,7 @@ void native_engine::setup_audio_output(session * sess)
 		{
 			sess->audio_sink_module = pa->load_module("module-null-sink",
 			                                          "sink_name=vd_audio rate=48000 channels=2 "
-			                                          "sink_properties=device.description=Virtual_Desktop_Audio");
+			                                          "sink_properties=device.description=\"OpenDesk Audio\"");
 			if (sess->audio_sink_module)
 			{
 				sess->restore_sink = pa->default_sink();
@@ -2324,9 +2326,15 @@ void native_engine::on_mic_packet(session * sess, const uint8_t * pcm, size_t si
 	{
 		if (pulse_client * pa = sess->pulse)
 		{
-			sess->mic_module = pa->load_module("module-null-sink",
-			                                   "media.class=Audio/Source/Virtual sink_name=opendesk_mic channel_map=mono rate=48000 "
-			                                   "sink_properties=device.description=Virtual_Desktop_Microphone");
+			// A sink the mic is played into, and the input device apps record from. (One node of class Audio/Source/Virtual
+			// isn't a sink to a Pulse client: the stream fell back to the default output and the input stayed silent.)
+			sess->mic_feed_module = pa->load_module("module-null-sink",
+			                                        "sink_name=opendesk_mic_feed channel_map=mono rate=48000 "
+			                                        "sink_properties=device.description=\"OpenDesk Microphone Feed\"");
+			if (sess->mic_feed_module)
+				sess->mic_module = pa->load_module("module-remap-source",
+				                                   "master=opendesk_mic_feed.monitor source_name=opendesk_mic channel_map=mono "
+				                                   "source_properties=device.description=\"OpenDesk Microphone\"");
 			if (options.auto_select_mic && sess->mic_module)
 			{
 				sess->restore_source = pa->default_source();

@@ -322,6 +322,63 @@ if not __import__("os").environ.get("NOAUDIO"):
     for _ in range(20):
         audio_ch.send((960).to_bytes(4, "little") + bytes(960))
     step("microphone packets sent", True)
+# AUDIO_PROBE=1 (harness: AUDIO_TEST_MODE): what reaches the headset, the PC's speakers and the microphone input
+if __import__("os").environ.get("AUDIO_PROBE"):
+    import array
+    import math as _m
+    import subprocess as _sp
+    import threading as _th
+
+    def rms(data):
+        s = array.array("h", data[: len(data) // 2 * 2])
+        return int((sum(x * x for x in s) / max(len(s), 1)) ** 0.5)
+
+    def record(device, seconds=1.2):
+        return _sp.run(["timeout", str(seconds), "parec", "--raw", "--format=s16le", "--rate=48000", "--channels=1", "--latency-msec=20", "-d", device],
+                       capture_output=True).stdout
+
+    time.sleep(1.5)  # routing changes settle
+    default = _sp.run(["pactl", "get-default-sink"], capture_output=True, text=True).stdout.strip()
+    speaker = rms(record("speaker.monitor"))
+    received = b""
+    if not __import__("os").environ.get("NOAUDIO"):
+        audio.settimeout(3)
+        t_end = time.monotonic() + 0.6
+        while time.monotonic() < t_end:
+            size = int.from_bytes(audio_ch.read(4), "little", signed=True)
+            received = audio_ch.read(size) if len(received) > 96000 else received + audio_ch.read(size)
+    mic_out = {}
+    def capture():
+        mic_out["input"] = rms(record("opendesk_mic", 1.0))
+    def capture_speaker():
+        mic_out["speaker"] = record("speaker.monitor", 1.0)
+    packet = 0
+    def tone():
+        global packet
+        out = b"".join(int(14000 * _m.sin((packet + i) * 2 * _m.pi * 880 / 48000)).to_bytes(2, "little", signed=True) for i in range(480))
+        packet += 480
+        return out
+    # the input device appears with the first packet
+    for _ in range(30):
+        audio_ch.send((960).to_bytes(4, "little") + tone())
+        time.sleep(0.01)
+    time.sleep(0.5)
+    a = _th.Thread(target=capture)
+    a.start()
+    t_end = time.monotonic() + 1.4
+    while time.monotonic() < t_end:
+        audio_ch.send((960).to_bytes(4, "little") + tone())
+        time.sleep(0.01)
+    a.join()
+    a = _th.Thread(target=capture_speaker)
+    a.start()
+    t_end = time.monotonic() + 1.4
+    while time.monotonic() < t_end:
+        audio_ch.send((960).to_bytes(4, "little") + tone())
+        time.sleep(0.01)
+    a.join()
+    # (speaker while the mic plays: the tone alone in modes that keep it, so compare with the level before)
+    print(f"AUDIO default_sink={default} headset={rms(received)} speaker={speaker} mic_input={mic_out['input']} speaker_during_mic={rms(mic_out['speaker'])}")
 def wait_format(pred, timeout=8):
     t_end = time.monotonic() + timeout
     while time.monotonic() < t_end:

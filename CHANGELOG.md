@@ -2,6 +2,11 @@
 
 The streamer's What's New tab and the GitHub release notes are both made from this file. Newest version first.
 
+## 1.1.1
+
+- Fixed the headset microphone: apps can now use the OpenDesk Microphone input, and it no longer plays through your speakers
+- WayVR and other overlays run in step with the game and no longer wait on the graphics card, for smoother panels over games
+
 ## 1.1
 
 - WayVR and other OpenXR overlay apps now work, on top of a game or by themselves

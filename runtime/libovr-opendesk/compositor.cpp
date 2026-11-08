@@ -466,6 +466,9 @@ compositor::~compositor()
 	if (app_device)
 	{
 		vkDestroyFence(app_device, app_fence, nullptr);
+		for (auto & t: tickets)
+			if (t.fence)
+				vkDestroyFence(app_device, t.fence, nullptr);
 		vkDestroyCommandPool(app_device, app_pool, nullptr);
 	}
 }
@@ -745,6 +748,66 @@ void compositor::hand_over(swapchain & sc, size_t image, bool to_game)
 	        },
 	        &ctx);
 	sc.external[image] = to_game;
+}
+
+int compositor::hand_over_async(const std::vector<image_ref> & to_game, const std::vector<image_ref> & back)
+{
+	std::vector<VkImageMemoryBarrier> barriers;
+	auto add = [&](const std::vector<image_ref> & list, bool game) {
+		for (const auto & [sc, image]: list)
+		{
+			if (image >= sc->images.size() || bool(sc->external[image]) == game)
+				continue;
+			VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+			b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			b.image = sc->images[image];
+			b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
+			b.srcQueueFamilyIndex = game ? app_family : VK_QUEUE_FAMILY_EXTERNAL;
+			b.dstQueueFamilyIndex = game ? VK_QUEUE_FAMILY_EXTERNAL : app_family;
+			b.srcAccessMask = game ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : 0;
+			b.dstAccessMask = game ? 0 : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+			barriers.push_back(b);
+			sc->external[image] = game;
+		}
+	};
+	add(to_game, true);
+	add(back, false);
+	if (barriers.empty())
+		return -1;
+	const int ticket = next_ticket;
+	next_ticket = (next_ticket + 1) % hand_over_tickets;
+	hand_over_ticket & t = tickets[ticket];
+	if (!t.cmd)
+	{
+		VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+		ai.commandPool = app_pool;
+		ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		ai.commandBufferCount = 1;
+		check(vkAllocateCommandBuffers(app_device, &ai, &t.cmd), "vkAllocateCommandBuffers(hand over)");
+		VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+		fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+		check(vkCreateFence(app_device, &fi, nullptr, &t.fence), "vkCreateFence(hand over)");
+	}
+	vkWaitForFences(app_device, 1, &t.fence, VK_TRUE, UINT64_MAX);
+	vkResetFences(app_device, 1, &t.fence);
+	vkResetCommandBuffer(t.cmd, 0);
+	VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+	bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+	vkBeginCommandBuffer(t.cmd, &bi);
+	vkCmdPipelineBarrier(t.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+	                     uint32_t(barriers.size()), barriers.data());
+	vkEndCommandBuffer(t.cmd);
+	VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+	si.commandBufferCount = 1;
+	si.pCommandBuffers = &t.cmd;
+	check(vkQueueSubmit(app_queue, 1, &si, t.fence), "vkQueueSubmit(hand over)");
+	return ticket;
+}
+
+void compositor::wait_hand_over(int ticket)
+{
+	if (ticket >= 0)
+		vkWaitForFences(app_device, 1, &tickets[ticket].fence, VK_TRUE, UINT64_MAX);
 }
 
 int compositor::export_memory(const swapchain & sc, size_t index)
