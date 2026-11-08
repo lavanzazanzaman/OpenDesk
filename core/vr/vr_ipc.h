@@ -23,22 +23,6 @@ constexpr size_t frame_data_size = 4992; // Upstream.Mobile.FrameData
 constexpr size_t skeleton_joint_bytes = 36, skeleton_max_joints = 84; // SkeletonDataChanged: joint, parent, pose
 constexpr uint32_t max_slots = 4;
 
-#ifdef _WIN32
-// Windows: a message-mode named pipe per user, \\.\pipe\opendesk-vr-<user SID>, whose DACL admits only that user (and
-// SYSTEM). Handles (the tracking section, the stream buffers' Vulkan memory) travel as a handle_block after the config.
-std::wstring pipe_name();
-bool service_available(); // the pipe exists (no connection made)
-
-struct handle_block // max_slots (4) x 4 images per slot + the tracking section
-{
-	uint32_t count = 0;
-	// 0: the values are already the client's own handles (the streamer duplicated them into the client process).
-	// Otherwise the streamer's pid: the client duplicates the values out of that process itself (the streamer could not
-	// open the client, e.g. an elevated game) and closes nothing on the streamer's side.
-	uint32_t owner_pid = 0;
-	uint64_t values[1 + 4 * 4] = {}; // tracking section, then per slot left, right (+ left fovea, right fovea)
-};
-#else
 std::string socket_path(); // $XDG_RUNTIME_DIR/opendesk/vr.sock
 // the same service on an abstract socket ("\0opendesk-<uid>/vr"): abstract names live in the network namespace, not
 // the file system, so apps inside Steam's pressure-vessel / flatpak containers (no $XDG_RUNTIME_DIR/opendesk) still
@@ -46,7 +30,6 @@ std::string socket_path(); // $XDG_RUNTIME_DIR/opendesk/vr.sock
 std::string abstract_name();
 bool same_user(int fd); // SO_PEERCRED uid == ours
 bool service_available(); // either socket is listening (no connection made)
-#endif
 
 // the clock of display_time_ns / frame_data_time_ns / next_frame_ns: CLOCK_MONOTONIC on Linux, QueryPerformanceCounter
 // on Windows (both ends of the connection read the same one)
@@ -103,13 +86,13 @@ struct config_msg
 	uint32_t generation = 0;      // bumps on every reconfiguration
 	uint32_t eye_width = 0, eye_height = 0; // recommended render size per eye (the app's swapchains)
 	uint32_t fps = 72;
-	uint32_t slot_count = 0;      // image sets that follow as fds (Windows: handles) (after the tracking memfd): per slot left, right
+	uint32_t slot_count = 0;      // image sets that follow as fds (after the tracking memfd): per slot left, right
 	                              // (+ left fovea, right fovea when foveated)
 	image_desc image{};           // the eye images (encoded size: periphery when foveated)
 	uint32_t foveated = 0;        // foveated streaming: also a fovea image per eye (unwarped crop at render density)
 	image_desc fovea_image{};
 	uint32_t shared_state_size = 0;
-	uint32_t render_major = 0, render_minor = 0; // the VR GPU's render node (Windows: its LUID, low and high part)
+	uint32_t render_major = 0, render_minor = 0; // the VR GPU's render node
 	uint32_t gpu_vendor = 0, gpu_device = 0;
 };
 
@@ -174,7 +157,7 @@ struct rendering_msg
 struct render_thread_msg
 {
 	msg type = msg::render_thread;
-	int32_t tid = 0; // gettid() in the app's PID namespace (Steam's container may have its own); Windows: thread id
+	int32_t tid = 0; // gettid() in the app's PID namespace (Steam's container may have its own)
 };
 
 struct shared_state

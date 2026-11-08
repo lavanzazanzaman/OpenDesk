@@ -24,17 +24,8 @@
 #include <string>
 #include <thread>
 #include <tuple>
-#ifdef _WIN32
-#include "mirror_d3d11.h"
-#include <OVR_CAPI_Audio.h>
-#include <OVR_CAPI_D3D.h>
-#include <d3d11_4.h>
-#include <mmdeviceapi.h>
-#define OVRVD_EXPORT extern "C" __declspec(dllexport)
-#else
 #include <unistd.h>
 #define OVRVD_EXPORT extern "C" __attribute__((visibility("default")))
-#endif
 
 using namespace od;
 using namespace od::ovr;
@@ -118,10 +109,6 @@ ovrResult fail(ovrResult r, const std::string & message)
 
 size_t chain_length(const swapchain & sc)
 {
-#ifdef _WIN32
-	if (sc.images.empty())
-		return sc.textures.size(); // D3D11 chain
-#endif
 	return sc.images.size();
 }
 
@@ -202,7 +189,6 @@ private:
 	std::thread thread;
 };
 
-
 struct session_state
 {
 	std::unique_ptr<vr_client> client;
@@ -232,10 +218,6 @@ struct session_state
 	VkDevice vk_device = VK_NULL_HANDLE;
 	VkQueue vk_queue = VK_NULL_HANDLE;
 	uint32_t vk_family = 0;
-#ifdef _WIN32
-	struct ID3D11Device * d3d_device = nullptr; // D3D11 mode: the compositor's app device
-	std::vector<od::ovr::mirror_d3d11 *> mirrors; // mirror textures of this session (owned by their ovrMirrorTexture)
-#endif
 	std::unique_ptr<compositor> comp;
 	frame_submitter submitter; // after comp and client: stops before they go away
 	float vibration[2] = {0, 0};
@@ -400,15 +382,9 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_Create(ovrSession * out, ovrGraphicsLuid * lu
 	std::string error;
 	auto s = std::make_unique<session_state>();
 	char exe[260] = {};
-#ifdef _WIN32
-	DWORD n = GetModuleFileNameA(nullptr, exe, sizeof(exe) - 1);
-	std::string app = n > 0 ? std::string(exe, size_t(n)) : "OpenXR app";
-	app = app.substr(app.find_last_of("\\/") + 1);
-#else
 	ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
 	std::string app = n > 0 ? std::string(exe, size_t(n)) : "OpenXR app";
 	app = app.substr(app.rfind('/') + 1);
-#endif
 	s->client = vr_client::connect(app, &error);
 	if (!s->client)
 		return fail(ovrError_ServiceConnection, error);
@@ -416,12 +392,6 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_Create(ovrSession * out, ovrGraphicsLuid * lu
 	if (luid)
 	{
 		std::memset(luid, 0, sizeof(*luid));
-#ifdef _WIN32
-		// the VR GPU (the streamer's encoder lives there): Windows' config carries its LUID in render_major/minor
-		const uint32_t lo = s->client->config().render_major, hi = s->client->config().render_minor;
-		std::memcpy(luid->Reserved, &lo, 4);
-		std::memcpy(luid->Reserved + 4, &hi, 4);
-#endif
 	}
 	od::ovr::set_report_client(s->client.get());
 	*out = reinterpret_cast<ovrSession>(s.release());
@@ -987,20 +957,10 @@ ovr_GetSessionPhysicalDeviceVk(ovrSession session, ovrGraphicsLuid, VkInstance i
 	int matches = 0;
 	for (VkPhysicalDevice d: devices)
 	{
-#ifdef _WIN32
-		VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-		VkPhysicalDeviceProperties2 p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
-		vkGetPhysicalDeviceProperties2(d, &p);
-		uint32_t lo = 0, hi = 0;
-		std::memcpy(&lo, id.deviceLUID, 4);
-		std::memcpy(&hi, id.deviceLUID + 4, 4);
-		if (id.deviceLUIDValid && lo == config.render_major && hi == config.render_minor) { pick = d; break; }
-#else
 		VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
 		VkPhysicalDeviceProperties2 p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &drm};
 		vkGetPhysicalDeviceProperties2(d, &p);
 		if (drm.hasRender && drm.renderMajor == config.render_major && drm.renderMinor == config.render_minor) { pick = d; break; }
-#endif
 		// Wine can hide the Linux-only DRM properties; only accept an unambiguous vendor/device match.
 		if (p.properties.vendorID == config.gpu_vendor && p.properties.deviceID == config.gpu_device) { fallback = d; ++matches; }
 	}
@@ -1203,7 +1163,6 @@ OVR_PUBLIC_FUNCTION(ovrResult) ovr_CommitTextureSwapChain(ovrSession, ovrTexture
 }
 
 // libovr-opendesk extension: commit a given image (OpenDesk XR keeps its own OpenXR image index)
-#ifndef _WIN32
 OVRVD_EXPORT ovrResult ovrvd_ExportTextureSwapChainMemory(ovrSession session, ovrTextureSwapChain chain, int index, int * fd, uint64_t * size)
 {
 	auto * s = S(session);
@@ -1222,7 +1181,6 @@ OVRVD_EXPORT ovrResult ovrvd_ExportTextureSwapChainMemory(ovrSession session, ov
 		return fail(ovrError_RuntimeException, e.what());
 	}
 }
-#endif
 
 OVRVD_EXPORT ovrResult ovrvd_CommitTextureSwapChainIndex(ovrSession, ovrTextureSwapChain chain, int index)
 {
@@ -1246,15 +1204,7 @@ OVR_PUBLIC_FUNCTION(void) ovr_DestroyTextureSwapChain(ovrSession session, ovrTex
 	delete c;
 }
 
-#ifdef _WIN32
-namespace { struct mirror_texture; void destroy_mirror(mirror_texture *); }
-OVR_PUBLIC_FUNCTION(void) ovr_DestroyMirrorTexture(ovrSession, ovrMirrorTexture m)
-{
-	destroy_mirror(reinterpret_cast<mirror_texture *>(m));
-}
-#else
 OVR_PUBLIC_FUNCTION(void) ovr_DestroyMirrorTexture(ovrSession, ovrMirrorTexture) {}
-#endif
 
 // ---------------------------------------------------------------------------------------------------------------------
 // frame submission
@@ -1267,11 +1217,7 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 	s->refresh();
 	if (!s->comp || !s->client->configured())
 		return ovrSuccess;
-#ifdef _WIN32
-	if (int tid = int(GetCurrentThreadId()); tid != s->render_tid)
-#else
 	if (pid_t tid = gettid(); tid != s->render_tid)
-#endif // "Boost game priority" raises this thread
 	{
 		s->render_tid = tid;
 		s->client->render_thread(tid);
@@ -1446,10 +1392,6 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 		                                     cfg.foveated ? info.fovea_top_left : nullptr);
 		if (double took = now_seconds() - t0; took > 0.5)
 			report("compositing one frame took %.0f ms (GPU busy or stalled)", took * 1000);
-#ifdef _WIN32
-		for (auto * mirror: s->mirrors)
-			mirror->update(list);
-#endif
 		if (!composited)
 			return ovrSuccess;
 	}
@@ -1478,203 +1420,3 @@ ovr_EndFrame(ovrSession session, long long, const ovrViewScaleDesc *, ovrLayerHe
 	return ovrSuccess;
 }
 
-#ifdef _WIN32
-// ---------------------------------------------------------------------------------------------------------------------
-// Direct3D 11 (OpenDesk XR's D3D11 core; D3D12, OpenGL and Vulkan apps reach it through its interop) and Windows audio
-
-namespace
-{
-struct dxgi_formats
-{
-	DXGI_FORMAT typed, typeless;
-};
-
-dxgi_formats dxgi_for(int f)
-{
-	switch (f)
-	{
-	case OVR_FORMAT_R8G8B8A8_UNORM: return {DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_TYPELESS};
-	case OVR_FORMAT_R8G8B8A8_UNORM_SRGB: return {DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_TYPELESS};
-	case OVR_FORMAT_B8G8R8A8_UNORM: return {DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_TYPELESS};
-	case OVR_FORMAT_B8G8R8A8_UNORM_SRGB: return {DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8A8_TYPELESS};
-	case OVR_FORMAT_B8G8R8X8_UNORM: return {DXGI_FORMAT_B8G8R8X8_UNORM, DXGI_FORMAT_B8G8R8X8_TYPELESS};
-	case OVR_FORMAT_B8G8R8X8_UNORM_SRGB: return {DXGI_FORMAT_B8G8R8X8_UNORM_SRGB, DXGI_FORMAT_B8G8R8X8_TYPELESS};
-	case OVR_FORMAT_R16G16B16A16_FLOAT: return {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS};
-	case OVR_FORMAT_R11G11B10_FLOAT: return {DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT};
-	case OVR_FORMAT_D16_UNORM: return {DXGI_FORMAT_D16_UNORM, DXGI_FORMAT_R16_TYPELESS};
-	case OVR_FORMAT_D24_UNORM_S8_UINT: return {DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R24G8_TYPELESS};
-	case OVR_FORMAT_D32_FLOAT: return {DXGI_FORMAT_D32_FLOAT, DXGI_FORMAT_R32_TYPELESS};
-	case OVR_FORMAT_D32_FLOAT_S8X24_UINT: return {DXGI_FORMAT_D32_FLOAT_S8X24_UINT, DXGI_FORMAT_R32G8X24_TYPELESS};
-	default: return {DXGI_FORMAT_UNKNOWN, DXGI_FORMAT_UNKNOWN};
-	}
-}
-
-compositor * ensure_compositor_d3d11(session_state * s, ID3D11Device * device)
-{
-	if (s->comp && s->d3d_device == device)
-		return s->comp.get();
-	s->submitter.drain(); // frames still referencing the old compositor
-	s->comp.reset();
-	s->comp = std::make_unique<compositor>(device);
-	s->d3d_device = device;
-	report("compositor: Direct3D 11 textures shared with Vulkan, %s", s->comp->pipelined() ? "GPU-side sync" : "CPU waits");
-	return s->comp.get();
-}
-
-struct mirror_texture
-{
-	session_state * session = nullptr;
-	std::unique_ptr<od::ovr::mirror_d3d11> view;
-};
-void destroy_mirror(mirror_texture * m)
-{
-	if (!m)
-		return;
-	if (m->session)
-	{
-		std::lock_guard lock(m->session->mutex);
-		std::erase(m->session->mirrors, m->view.get());
-	}
-	delete m;
-}
-
-// the default endpoint's GUID ("{0.0.0.00000000}.{guid}" -> "{guid}"): the headset's audio is the PC's default
-// device while streaming (the streamer routes it there)
-ovrResult audio_guid(EDataFlow flow, WCHAR * out)
-{
-	if (!out)
-		return ovrError_InvalidParameter;
-	out[0] = 0;
-	const bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
-	IMMDeviceEnumerator * e = nullptr;
-	IMMDevice * d = nullptr;
-	LPWSTR id = nullptr;
-	ovrResult r = ovrError_AudioDeviceNotFound;
-	if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator), reinterpret_cast<void **>(&e))) &&
-	    SUCCEEDED(e->GetDefaultAudioEndpoint(flow, eConsole, &d)) && SUCCEEDED(d->GetId(&id)))
-	{
-		std::wstring s(id);
-		const size_t brace = s.rfind(L'{');
-		if (brace != std::wstring::npos)
-			s = s.substr(brace);
-		wcsncpy(out, s.c_str(), OVR_AUDIO_MAX_DEVICE_STR_SIZE - 1);
-		out[OVR_AUDIO_MAX_DEVICE_STR_SIZE - 1] = 0;
-		r = ovrSuccess;
-	}
-	CoTaskMemFree(id);
-	if (d)
-		d->Release();
-	if (e)
-		e->Release();
-	if (com)
-		CoUninitialize();
-	return r;
-}
-} // namespace
-
-OVR_PUBLIC_FUNCTION(ovrResult)
-ovr_CreateTextureSwapChainDX(ovrSession session, IUnknown * d3dPtr, const ovrTextureSwapChainDesc * desc, ovrTextureSwapChain * out)
-{
-	if (!desc || !out || !d3dPtr)
-		return ovrError_InvalidParameter;
-	auto * s = S(session);
-	std::lock_guard lock(s->mutex);
-	ID3D11Device * device = nullptr;
-	if (FAILED(d3dPtr->QueryInterface(__uuidof(ID3D11Device), reinterpret_cast<void **>(&device))))
-		return fail(ovrError_Unsupported, "only Direct3D 11 swapchains are supported (OpenDesk XR brings D3D12 apps to D3D11)");
-	device->Release(); // the app keeps it alive
-	try
-	{
-		compositor * comp = ensure_compositor_d3d11(s, device);
-		bool depth, srgb;
-		VkFormat format = vk_format_for(desc->Format, depth, srgb);
-		const dxgi_formats dxgi = dxgi_for(desc->Format);
-		if (format == VK_FORMAT_UNDEFINED || dxgi.typed == DXGI_FORMAT_UNKNOWN)
-			return fail(ovrError_InvalidParameter, "unsupported texture format " + std::to_string(desc->Format));
-		const bool typeless = (desc->MiscFlags & ovrTextureMisc_DX_Typeless) != 0;
-		auto chain = std::make_unique<texture_chain>();
-		chain->desc = *desc;
-		chain->srgb = srgb;
-		const uint32_t count = desc->StaticImage ? 1 : 3;
-		const bool cube = desc->Type == ovrTexture_Cube;
-		chain->images = comp->create_swapchain_d3d11(
-		        uint32_t(typeless ? dxgi.typeless : dxgi.typed), format, uint32_t(desc->Width), uint32_t(desc->Height),
-		        uint32_t(std::max(desc->ArraySize, 1)) * (cube ? 6 : 1), uint32_t(desc->MipLevels), uint32_t(desc->SampleCount), count, depth,
-		        cube, (desc->BindFlags & ovrTextureBind_DX_RenderTarget) || !(desc->BindFlags & ovrTextureBind_DX_UnorderedAccess),
-		        (desc->BindFlags & ovrTextureBind_DX_UnorderedAccess) != 0, typeless);
-		chain->images->dxgi_view_format = uint32_t(dxgi.typed);
-		*out = reinterpret_cast<ovrTextureSwapChain>(chain.release());
-		return ovrSuccess;
-	}
-	catch (const std::exception & e)
-	{
-		return fail(ovrError_RuntimeException, e.what());
-	}
-}
-
-OVR_PUBLIC_FUNCTION(ovrResult)
-ovr_GetTextureSwapChainBufferDX(ovrSession, ovrTextureSwapChain chain, int index, IID iid, void ** out)
-{
-	auto * c = reinterpret_cast<texture_chain *>(chain);
-	if (!c || !out || index < 0 || size_t(index) >= c->images->textures.size())
-		return ovrError_InvalidParameter;
-	return SUCCEEDED(c->images->textures[size_t(index)]->QueryInterface(iid, out)) ? ovrSuccess : ovrError_InvalidParameter;
-}
-
-// the desktop mirror: the eye(s) the options ask for, refreshed at every ovr_EndFrame (mirror_d3d11.h)
-OVR_PUBLIC_FUNCTION(ovrResult)
-ovr_CreateMirrorTextureWithOptionsDX(ovrSession session, IUnknown * d3dPtr, const ovrMirrorTextureDesc * desc, ovrMirrorTexture * out)
-{
-	if (!d3dPtr || !desc || !out)
-		return ovrError_InvalidParameter;
-	ID3D11Device * device = nullptr;
-	if (FAILED(d3dPtr->QueryInterface(__uuidof(ID3D11Device), reinterpret_cast<void **>(&device))))
-		return ovrError_Unsupported;
-	const dxgi_formats dxgi = dxgi_for(desc->Format);
-	auto m = std::make_unique<mirror_texture>();
-	if (dxgi.typed != DXGI_FORMAT_UNKNOWN)
-		m->view = std::make_unique<od::ovr::mirror_d3d11>(device, UINT(std::max(desc->Width, 1)), UINT(std::max(desc->Height, 1)),
-		                                                  (desc->MiscFlags & ovrTextureMisc_DX_Typeless) ? dxgi.typeless : dxgi.typed,
-		                                                  dxgi.typed, unsigned(desc->MirrorOptions));
-	device->Release();
-	if (!m->view || !m->view->texture())
-		return ovrError_InvalidParameter;
-	if (auto * s = S(session))
-	{
-		std::lock_guard lock(s->mutex);
-		m->session = s;
-		s->mirrors.push_back(m->view.get());
-	}
-	*out = reinterpret_cast<ovrMirrorTexture>(m.release());
-	return ovrSuccess;
-}
-
-OVR_PUBLIC_FUNCTION(ovrResult) ovr_CreateMirrorTextureDX(ovrSession session, IUnknown * d3dPtr, const ovrMirrorTextureDesc * desc, ovrMirrorTexture * out)
-{
-	return ovr_CreateMirrorTextureWithOptionsDX(session, d3dPtr, desc, out);
-}
-
-OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetMirrorTextureBufferDX(ovrSession, ovrMirrorTexture mirror, IID iid, void ** out)
-{
-	auto * m = reinterpret_cast<mirror_texture *>(mirror);
-	if (!m || !m->view || !m->view->texture() || !out)
-		return ovrError_InvalidParameter;
-	return SUCCEEDED(m->view->texture()->QueryInterface(iid, out)) ? ovrSuccess : ovrError_InvalidParameter;
-}
-
-OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetAudioDeviceOutGuidStr(WCHAR deviceOutStrBuffer[OVR_AUDIO_MAX_DEVICE_STR_SIZE])
-{
-	return audio_guid(eRender, deviceOutStrBuffer);
-}
-
-OVR_PUBLIC_FUNCTION(ovrResult) ovr_GetAudioDeviceInGuidStr(WCHAR deviceInStrBuffer[OVR_AUDIO_MAX_DEVICE_STR_SIZE])
-{
-	return audio_guid(eCapture, deviceInStrBuffer);
-}
-
-// OpenDesk XR links libovr-opendesk directly; the shim's path override has nothing to load
-OVR_PUBLIC_FUNCTION(ovrResult) ovr_InitializeWithPathOverride(const ovrInitParams * params, const wchar_t *)
-{
-	return ovr_Initialize(params);
-}
-#endif

@@ -1,4 +1,4 @@
-// ETW TraceLogging -> nothing (the Linux build, and the Windows build with MinGW, whose headers lack TraceLogging).
+// ETW TraceLogging -> nothing (not available on Linux).
 // Arguments are never evaluated.
 #pragma once
 

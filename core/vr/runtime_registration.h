@@ -1,4 +1,4 @@
-// Makes OpenDesk XR the system's OpenXR runtime while the streamer runs (Windows: the "OpenXR Runtime" option; the loader
+// Makes OpenDesk XR the system's OpenXR runtime while the streamer runs (the loader
 // reads ~/.config/openxr/1/active_runtime[.x86_64].json). Reversible:
 //   activate(): copies the runtime into ~/.local/share/opendesk/openxr (visible inside Steam's pressure-vessel
 //               container), backs up the user's active_runtime files to ~/.local/state/opendesk/openxr-backup and

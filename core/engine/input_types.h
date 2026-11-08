@@ -12,7 +12,7 @@ namespace od
 struct input_screen
 {
 	rect bounds;
-	std::string output; // Linux: compositor output name ("DP-1"); Windows: monitor device name; empty = unknown
+	std::string output; // compositor output name ("DP-1"); empty = unknown
 	bool operator==(const input_screen &) const = default;
 };
 struct input_layout

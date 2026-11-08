@@ -239,27 +239,6 @@ namespace opendesk_openxr {
 
             sampleTime = time;
 
-#ifdef _WIN32
-        } else if (m_eyeTrackingType == EyeTracking::Simulated) {
-            XrVector2f point{0.5f, 0.5f};
-
-            // Use the mouse to simulate eye tracking.
-            RECT rect;
-            rect.left = 1;
-            rect.right = 999;
-            rect.top = 1;
-            rect.bottom = 999;
-            ClipCursor(&rect);
-
-            POINT pt{};
-            GetCursorPos(&pt);
-
-            point = {(float)pt.x / 1000.f, (float)pt.y / 1000.f};
-            sampleTime = ovrTimeToXrTime(ovr_GetTimeInSeconds());
-
-            unitVector = Normalize({point.x - 0.5f, 0.5f - point.y, -0.35f});
-
-#endif
         } else {
             return false;
         }

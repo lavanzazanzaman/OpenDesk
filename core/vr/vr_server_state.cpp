@@ -1,5 +1,5 @@
 // The platform-neutral half of vr_server: the shared tracking state (seqlock writer), stream geometry and settings.
-// The transport (Unix sockets + fds on Linux, a named pipe + NT handles on Windows) is in vr_server.cpp / vr_server_win.cpp.
+// The transport (Unix sockets + fds) is in vr_server.cpp.
 #include "vr_server.h"
 
 #include <algorithm>

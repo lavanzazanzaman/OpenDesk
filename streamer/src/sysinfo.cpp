@@ -7,21 +7,6 @@
 #include <QSettings>
 #include <QSysInfo>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <windows.h>
-#include <dxgi.h>
-#include <iphlpapi.h>
-
-#include <cstdint>
-#include <vector>
-
-extern "C" {
-#include <libavcodec/avcodec.h>
-}
-#endif
-
 namespace
 {
 QString readFile(const QString & path)
@@ -33,25 +18,6 @@ QString readFile(const QString & path)
 
 QString sysinfo::graphicsCards()
 {
-#ifdef _WIN32
-	IDXGIFactory * factory = nullptr;
-	if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void **>(&factory))) || !factory)
-		return "Unknown";
-	QStringList cards;
-	for (UINT i = 0;; ++i)
-	{
-		IDXGIAdapter * adapter = nullptr;
-		if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
-			break;
-		DXGI_ADAPTER_DESC desc{};
-		if (SUCCEEDED(adapter->GetDesc(&desc)))
-			cards << QString::fromWCharArray(desc.Description).trimmed();
-		adapter->Release();
-	}
-	factory->Release();
-	cards.removeAll(QString());
-	return cards.isEmpty() ? "Unknown" : cards.join("\n");
-#else
 	// `lspci -mm`: "03:00.0" "VGA compatible controller" "Advanced Micro Devices, Inc. [AMD/ATI]" "Navi 48 [Radeon RX 9070/9070 XT/9070 GRE]" ...
 	QProcess p;
 	p.start("lspci", {"-mm"});
@@ -75,57 +41,31 @@ QString sysinfo::graphicsCards()
 		}
 	}
 	return cards.isEmpty() ? "Unknown" : cards.join("\n");
-#endif
 }
 
 QString sysinfo::processor()
 {
-#ifdef _WIN32
-	QSettings cpu("HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", QSettings::NativeFormat);
-	const QString name = cpu.value("ProcessorNameString").toString().trimmed();
-	return name.isEmpty() ? QSysInfo::currentCpuArchitecture() : name;
-#else
 	static const QRegularExpression re(R"(model name\s*:\s*(.+))");
 	auto m = re.match(readFile("/proc/cpuinfo"));
 	return m.hasMatch() ? m.captured(1).trimmed() : QSysInfo::currentCpuArchitecture();
-#endif
 }
 
 QString sysinfo::memory()
 {
-#ifdef _WIN32
-	MEMORYSTATUSEX status{};
-	status.dwLength = sizeof(status);
-	if (!GlobalMemoryStatusEx(&status))
-		return "Unknown";
-	return QString("%1 GB").arg(qRound64(double(status.ullTotalPhys) / 1024 / 1024 / 1024));
-#else
 	static const QRegularExpression re(R"(MemTotal:\s*(\d+) kB)");
 	auto m = re.match(readFile("/proc/meminfo"));
 	if (!m.hasMatch())
 		return "Unknown";
 	return QString("%1 GB").arg(qRound(m.captured(1).toDouble() / 1024 / 1024));
-#endif
 }
 
 QString sysinfo::operatingSystem()
 {
-#ifdef _WIN32
-	return QSysInfo::prettyProductName() + " (Windows " + QSysInfo::kernelVersion() + ")";
-#else
 	return QSysInfo::prettyProductName() + " (Linux " + QSysInfo::kernelVersion() + ")";
-#endif
 }
 
 QString sysinfo::secureBoot()
 {
-#ifdef _WIN32
-	QSettings state("HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State", QSettings::NativeFormat);
-	const QVariant value = state.value("UEFISecureBootEnabled");
-	if (!value.isValid())
-		return "Not UEFI";
-	return value.toInt() ? "Enabled" : "Disabled";
-#else
 	// efivar SecureBoot-8be4df61-...: 4 attribute bytes + 1 value byte
 	QDir vars("/sys/firmware/efi/efivars");
 	if (!vars.exists())
@@ -141,35 +81,10 @@ QString sysinfo::secureBoot()
 		}
 	}
 	return "Unknown";
-#endif
 }
 
 QString sysinfo::routerUrl()
 {
-#ifdef _WIN32
-	ULONG size = 15000;
-	std::vector<uint8_t> buffer(size);
-	auto * adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
-	ULONG result = GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_GATEWAYS, nullptr, adapters, &size);
-	if (result == ERROR_BUFFER_OVERFLOW)
-	{
-		buffer.resize(size);
-		adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data());
-		result = GetAdaptersAddresses(AF_INET, GAA_FLAG_INCLUDE_GATEWAYS, nullptr, adapters, &size);
-	}
-	if (result != NO_ERROR)
-		return {};
-	for (auto * a = adapters; a; a = a->Next)
-		for (auto * g = a->FirstGatewayAddress; g; g = g->Next)
-			if (g->Address.lpSockaddr && g->Address.lpSockaddr->sa_family == AF_INET)
-			{
-				auto * in = reinterpret_cast<sockaddr_in *>(g->Address.lpSockaddr);
-				const uint8_t * b = reinterpret_cast<const uint8_t *>(&in->sin_addr);
-				if (b[0] || b[1] || b[2] || b[3])
-					return QString("http://%1.%2.%3.%4").arg(b[0]).arg(b[1]).arg(b[2]).arg(b[3]);
-			}
-	return {};
-#else
 	// /proc/net/route: default route has Destination 00000000, Gateway little-endian hex
 	for (const QString & line: readFile("/proc/net/route").split('\n').mid(1))
 	{
@@ -183,17 +98,9 @@ QString sysinfo::routerUrl()
 		}
 	}
 	return {};
-#endif
 }
 
 bool sysinfo::hasHardwareEncoder()
 {
-#ifdef _WIN32
-	for (const char * name: {"h264_nvenc", "h264_amf", "h264_qsv", "h264_mf"})
-		if (avcodec_find_encoder_by_name(name))
-			return true;
-	return false;
-#else
 	return !QDir("/dev/dri").entryList({"renderD*"}, QDir::System).isEmpty();
-#endif
 }

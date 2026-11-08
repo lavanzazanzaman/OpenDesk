@@ -21,12 +21,6 @@ struct AVFilterContext;
 struct AVFrame;
 struct SwsContext;
 
-#ifdef _WIN32
-extern "C" {
-#include <libavutil/pixfmt.h> // AVPixelFormat in the Windows encoder members
-}
-#endif
-
 namespace od
 {
 struct encoder_config
@@ -48,7 +42,7 @@ struct encoder_config
 
 struct captured_frame
 {
-	// DMA-BUF / Vulkan memory (fd: an fd on Linux, an NT handle on Windows) or CPU memory (data != nullptr)
+	// DMA-BUF / Vulkan memory or CPU memory (data != nullptr)
 	native_handle fd = no_handle;
 	uint32_t drm_format = 0; // DRM fourcc, e.g. XRGB8888
 	uint64_t modifier = 0;
@@ -61,11 +55,6 @@ struct captured_frame
 	uint32_t uv_offset = 0;     // two-plane formats (NV12/P010): chroma plane offset
 	uint64_t buffer_bytes = 0;  // opaque buffers: the exporter's VkBuffer size
 	bool host_visible = false;  // opaque buffers in system memory: mapped directly
-#ifdef _WIN32
-	// Windows desktop capture on the GPU: a BGRA ID3D11Texture2D on this ID3D11Device (valid during the call)
-	void * d3d11_device = nullptr;
-	void * d3d11_texture = nullptr;
-#endif
 };
 
 class opaque_buffer_reader;
@@ -83,11 +72,7 @@ public:
 	const encoder_config & config() const { return cfg; }
 	const char * backend() const
 	{
-#ifdef _WIN32
-		return selected ? selected : "FFmpeg";
-#else
 		return nvenc ? "NVENC" : "VAAPI";
-#endif
 	}
 	// e.g. "NVENC, CUDA input" / "VAAPI, CPU copy": how frames reach the encoder (after prime)
 	std::string input_path() const;
@@ -107,43 +92,6 @@ private:
 	std::function<void(const std::string &)> log;
 	void note(const std::string & line);
 	encoder_config cfg;
-#ifdef _WIN32
-	// Windows: BGRA frames from DXGI Desktop Duplication or NV12/P010 VR frames (Vulkan memory from the runtime) on the
-	// GPU named by cfg.render_node -> the first working hardware encoder (NVENC / AMF / QSV) or Media Foundation /
-	// libx264 / libx265. NVENC takes VR frames straight from the Vulkan memory through CUDA; the others get a GPU readback.
-	void setup(const captured_frame &);
-	void open_codec(AVPixelFormat input, AVBufferRef * frames);
-	void convert(const captured_frame &);
-	void send_frame(bool force_idr, const au_callback &);
-	const AVCodec * codec_def = nullptr;
-	AVCodecContext * codec = nullptr;
-	const char * selected = nullptr;
-	AVFrame * last = nullptr;
-	AVFrame * nv12 = nullptr;
-	SwsContext * sws = nullptr;
-	int src_width = 0, src_height = 0, src_stride = 0;
-	AVPixelFormat src_format = AV_PIX_FMT_NONE;
-	bool src_opaque = false;
-	int64_t pts = 0;
-	AVBufferRef * hw_device = nullptr; // D3D11 device on the chosen adapter (picks the GPU for NVENC / AMF / QSV)
-	struct cuda_state;                 // NVENC: the runtime's Vulkan memory imported into CUDA, encoded in place
-	std::unique_ptr<cuda_state> cuda;
-	bool cuda_input = false, cuda_failed = false;
-	std::unique_ptr<opaque_buffer_reader> opaque; // the other encoders: a readback of the Vulkan memory
-	struct d3d11_state; // desktop frames on the GPU: video processor BGRA -> NV12/P010 into D3D11 encoder frames
-	std::unique_ptr<d3d11_state> d3d;
-	bool d3d_input = false, d3d_failed = false;
-	bool rgb_input = false;       // BGRA D3D11 frames straight into NVENC (its own RGB -> YUV conversion)
-	bool eight_bit_input = false; // 10-bit codec fed NV12 (NVENC "highbitdepth"): the video processor has no P010 output
-	void setup_d3d11(const captured_frame &);
-	const uint8_t * read_texture(const captured_frame &, int & stride); // fallback: the texture on the CPU
-	// VR frames for AMF / Media Foundation: a GPU copy from the runtime's Vulkan memory into D3D11 frames (no CPU copy)
-	std::unique_ptr<class opaque_buffer_copier> copier;
-	AVBufferRef * copy_device = nullptr;
-	AVBufferRef * copy_frames = nullptr;
-	bool copy_input = false, copy_failed = false;
-	void setup_vr_d3d11(AVPixelFormat sw_format);
-#else
 	void setup_filters(const captured_frame &);
 	void encode_nv12(AVFrame *, bool force_idr, const au_callback &);
 	void setup_nvenc(const captured_frame &);
@@ -172,10 +120,9 @@ private:
 	AVFrame * last_nv12 = nullptr;
 	int64_t pts_origin = -1;
 	int64_t last_pts = -1;
-#endif
 };
 
-// Picks the render node of the GPU driving the displays (OPENDESK_RENDER_NODE overrides). Empty on Windows.
+// Picks the render node of the GPU driving the displays (OPENDESK_RENDER_NODE overrides).
 std::string default_render_node();
 // The GPU for VR (apps render there, its buffers and encoder live there): the display GPU, except on hybrid laptops
 // whose display runs on an integrated GPU, where the discrete one (OPENDESK_VR_RENDER_NODE overrides).
@@ -183,6 +130,8 @@ std::string vr_render_node();
 // the GPU encoding VR (vr_render_node() unless two cards are in use) and the desktop (always the display's)
 std::string vr_encode_node();
 std::string desktop_encode_node();
+// the card VR games use with no card chosen: the main screen's (a laptop's discrete GPU if the screen is on the integrated one)
+std::string auto_vr_render_node();
 // dual-GPU use (PCI addresses like 0000:03:00.0; empty: automatic / one card for everything)
 void set_gpu_selection(const std::string & game_pci, const std::string & streaming_pci);
 struct gpu_info
@@ -192,7 +141,7 @@ struct gpu_info
 };
 std::vector<gpu_info> list_gpus();
 unsigned gpu_vendor(const std::string & render_node);
-// Linux: opens the VAAPI device and looks for the H.264 encoder; Windows: tries the available encoders.
+// Opens the VAAPI device and looks for the H.264 encoder.
 // Empty string = usable, else the reason.
 std::string hardware_encoder_probe(const std::string & render_node);
 // The codecs the GPU can encode (one small frame each; takes a moment - call off the UI thread)

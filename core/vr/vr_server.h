@@ -60,7 +60,7 @@ public:
 	// the connected app renders (announced it or submitted a frame). Probing clients - Proton's launcher shim, WineOpenXR's
 	// test instance, RiftLift's headless sessions - connect and leave without ever submitting.
 	bool rendering() const { return has_client() && submitted.load(); }
-	int client_pid() const { return has_client() ? peer_pid.load() : 0; } // in our pid namespace (SO_PEERCRED; Windows: the pipe client)
+	int client_pid() const { return has_client() ? peer_pid.load() : 0; } // in our pid namespace (SO_PEERCRED)
 
 private:
 	std::string render_node;
@@ -69,9 +69,9 @@ private:
 	void write_end();
 
 	callbacks cb;
-	std::unique_ptr<vk_buffer_pool> vk_pool; // NVIDIA (Windows: every GPU): exportable Vulkan memory (vk_buffers.h)
+	std::unique_ptr<vk_buffer_pool> vk_pool; // NVIDIA: exportable Vulkan memory (vk_buffers.h)
 	ipc::shared_state * state = nullptr;
-	std::atomic<int> client_fd{-1}; // the selected client (Windows: its connection id)
+	std::atomic<int> client_fd{-1}; // the selected client
 	std::atomic<int> peer_pid{0};
 	std::atomic<bool> submitted{false};
 	std::atomic<bool> quit{false};
@@ -89,10 +89,6 @@ private:
 	std::atomic<bool> config_dirty{false};
 	std::shared_ptr<frame_sink> sink;
 	void wake(char reason); // 'c' configuration, 'q' quit
-#ifdef _WIN32
-	struct win32; // vr_server_win.cpp: pipe instances, peers, the tracking section
-	std::unique_ptr<win32> w;
-#else
 	void send_config(int fd); // server thread (or under mutex)
 	gbm_allocator alloc;
 	int listen_fd = -1;
@@ -112,7 +108,6 @@ private:
 	};
 	std::shared_ptr<release_queue> releases = std::make_shared<release_queue>();
 	std::map<int, peer> peers; // server thread only; separate buffers prevent cross-client writes
-#endif
 	std::thread thread;
 };
 } // namespace od

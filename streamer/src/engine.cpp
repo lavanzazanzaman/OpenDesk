@@ -19,7 +19,7 @@
 void Engine::applyGpuSelection()
 {
 	const auto & s = StreamerSettings::instance();
-	od::set_gpu_selection(s.dualGpu ? s.gameGpu.toStdString() : std::string(), s.dualGpu ? s.streamingGpu.toStdString() : std::string());
+	od::set_gpu_selection(s.effectiveGameGpu().toStdString(), s.effectiveStreamingGpu().toStdString());
 }
 
 Engine::Engine(QObject * parent) :
@@ -75,14 +75,6 @@ QStringList Engine::arguments() const
 }
 
 // connected displays; Qt substitutes a nameless placeholder screen when every output is gone
-static QJsonObject dxvkGamesJson(const StreamerSettings & s)
-{
-	QJsonObject o;
-	for (auto it = s.dxvkGames.begin(); it != s.dxvkGames.end(); ++it)
-		o[it.key()] = it.value();
-	return o;
-}
-
 static int realScreens()
 {
 	int n = 0;
@@ -104,8 +96,9 @@ QJsonObject Engine::optionsJson() const
 	        {"aq", s.enableAQ},
 	        {"two_pass", s.enable2Pass},
 	        {"adaptive_speed", s.adaptiveEncoderSpeed},
+	        {"nvenc_preset", s.nvencPreset},
 	        {"amd_preset", s.amdEncoderSpeed},
-	        {"gpu_selection", s.dualGpu ? s.gameGpu + "/" + s.streamingGpu : QString()},
+	        {"gpu_selection", s.effectiveGameGpu().isEmpty() ? QString() : s.effectiveGameGpu() + "/" + s.effectiveStreamingGpu()},
 	        {"fovea_size", s.foveaSize},
 	        {"periphery_scale", s.peripheryScale},
 	        {"audio_mode", int(s.audioStreaming)},
@@ -126,8 +119,6 @@ QJsonObject Engine::optionsJson() const
 	        {"use_stencil", s.useFovStencil},
 	        {"soft_fovea_edge", s.softFoveaEdge},
 	        {"boost_priority", s.boostGamePriority},
-	        {"dxvk_default", s.dxvkByDefault},
-	        {"dxvk_games", dxvkGamesJson(s)},
 	        {"touch", s.useTouchInput},
 	        {"mouth_sensitivity", s.mouthSensitivity},
 	        {"reported_version", s.reportedVersionAuto ? QString("auto") : s.reportedStreamerVersion},

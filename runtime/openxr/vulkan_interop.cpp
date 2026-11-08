@@ -87,12 +87,6 @@ namespace opendesk_openxr {
                                                            uint32_t bufferCapacityInput,
                                                            uint32_t* bufferCountOutput,
                                                            char* buffer) {
-#ifdef _WIN32
-        static const std::string_view deviceExtensions = "VK_KHR_dedicated_allocation VK_KHR_get_memory_requirements2 "
-                                                         "VK_KHR_external_memory "
-                                                         "VK_KHR_external_memory_win32 VK_KHR_timeline_semaphore "
-                                                         "VK_KHR_external_semaphore VK_KHR_external_semaphore_win32";
-#else
         // Linux: libovr-opendesk shares swapchain memory with its private compositor device as opaque fds. Nothing
         // Linux-only beyond that (no dma_buf / drm modifiers): Wine doesn't expose those to Windows games, and
         // DXVK / vkd3d-proton then fail to create their device ("make sure you have DX11").
@@ -102,7 +96,6 @@ namespace opendesk_openxr {
         static const std::string_view deviceExtensions =
             "VK_KHR_dedicated_allocation VK_KHR_get_memory_requirements2 VK_KHR_external_memory VK_KHR_external_memory_fd "
             "VK_KHR_external_semaphore VK_KHR_external_semaphore_fd";
-#endif
 
         TraceLoggingWrite(g_traceProvider,
                           "xrGetVulkanDeviceExtensionsKHR",
@@ -165,41 +158,12 @@ namespace opendesk_openxr {
 
         CHECK_MSG(ensureOVRSession(), "Failed to re-create OVR session\n");
 
-#ifdef _WIN32
-        uint32_t deviceCount = 0;
-        CHECK_VKCMD(vkEnumeratePhysicalDevices(vkInstance, &deviceCount, nullptr));
-        std::vector<VkPhysicalDevice> devices(deviceCount);
-        CHECK_VKCMD(vkEnumeratePhysicalDevices(vkInstance, &deviceCount, devices.data()));
-
-        // Match the Vulkan physical device to the adapter LUID returned by OVR.
-        bool found = false;
-        for (const VkPhysicalDevice& device : devices) {
-            VkPhysicalDeviceIDProperties deviceId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &deviceId};
-            vkGetPhysicalDeviceProperties2(device, &properties);
-
-            if (!deviceId.deviceLUIDValid) {
-                continue;
-            }
-
-            if (!memcmp(&m_adapterLuid, deviceId.deviceLUID, sizeof(LUID))) {
-                TraceLoggingWrite(
-                    g_traceProvider, "xrGetVulkanDeviceExtensionsKHR", TLPArg(device, "VkPhysicalDevice"));
-                *vkPhysicalDevice = device;
-                found = true;
-                break;
-            }
-        }
-
-        return found ? XR_SUCCESS : XR_ERROR_RUNTIME_FAILURE;
-#else
         // Linux: libovr-opendesk picks the GPU the streamer encodes on (its DMA-BUFs are only importable there)
         return ovr_GetSessionPhysicalDeviceVk(
                    m_ovrSession, *reinterpret_cast<ovrGraphicsLuid*>(&m_adapterLuid), vkInstance, vkPhysicalDevice) ==
                        ovrSuccess
                    ? XR_SUCCESS
                    : XR_ERROR_RUNTIME_FAILURE;
-#endif
     }
 
     // https://www.khronos.org/registry/OpenXR/specs/1.0/html/xrspec.html#xrCreateVulkanInstanceKHR
@@ -245,7 +209,6 @@ namespace opendesk_openxr {
         for (uint32_t i = 0; i < createInfo->vulkanCreateInfo->enabledExtensionCount; ++i) {
             extensions.push_back(createInfo->vulkanCreateInfo->ppEnabledExtensionNames[i]);
         }
-#ifndef _WIN32
         // Linux: the advertised semaphore extensions only where the GPU has them (else libovr-opendesk waits on the CPU)
         {
             auto enumerate = (PFN_vkEnumerateDeviceExtensionProperties)createInfo->pfnGetInstanceProcAddr(
@@ -268,7 +231,6 @@ namespace opendesk_openxr {
                 });
             }
         }
-#endif
 
         for (uint32_t i = 0; i < extensions.size(); i++) {
             TraceLoggingWrite(g_traceProvider, "xrCreateVulkanInstanceKHR", TLArg(extensions[i], "Extension"));
@@ -339,7 +301,6 @@ namespace opendesk_openxr {
         for (uint32_t i = 0; i < createInfo->vulkanCreateInfo->enabledExtensionCount; ++i) {
             extensions.push_back(createInfo->vulkanCreateInfo->ppEnabledExtensionNames[i]);
         }
-#ifndef _WIN32
         // Linux: the advertised semaphore extensions only where the GPU has them (else libovr-opendesk waits on the CPU)
         {
             auto enumerate = (PFN_vkEnumerateDeviceExtensionProperties)createInfo->pfnGetInstanceProcAddr(
@@ -362,7 +323,6 @@ namespace opendesk_openxr {
                 });
             }
         }
-#endif
 
         for (uint32_t i = 0; i < extensions.size(); i++) {
             TraceLoggingWrite(g_traceProvider, "xrCreateVulkanDeviceKHR", TLArg(extensions[i], "Extension"));
@@ -499,45 +459,6 @@ namespace opendesk_openxr {
         // Gather function pointers for the Vulkan device extensions we are going to use.
         initializeVulkanDispatch(vkBindings.instance);
 
-#ifdef _WIN32
-        // Check that this is the correct adapter for the HMD.
-        VkPhysicalDeviceIDProperties deviceId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-        VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &deviceId};
-        m_vkDispatch.vkGetPhysicalDeviceProperties2(vkBindings.physicalDevice, &properties);
-        if (!deviceId.deviceLUIDValid) {
-            return XR_ERROR_RUNTIME_FAILURE;
-        }
-
-        const bool queueSupportsTimers = properties.properties.limits.timestampComputeAndGraphics;
-
-        ComPtr<IDXGIFactory1> dxgiFactory;
-        CHECK_HRCMD(CreateDXGIFactory1(IID_PPV_ARGS(dxgiFactory.ReleaseAndGetAddressOf())));
-
-        ComPtr<IDXGIAdapter1> dxgiAdapter;
-        for (UINT adapterIndex = 0;; adapterIndex++) {
-            // EnumAdapters1 will fail with DXGI_ERROR_NOT_FOUND when there are no more adapters to
-            // enumerate.
-            CHECK_HRCMD(dxgiFactory->EnumAdapters1(adapterIndex, dxgiAdapter.ReleaseAndGetAddressOf()));
-
-            DXGI_ADAPTER_DESC1 desc;
-            CHECK_HRCMD(dxgiAdapter->GetDesc1(&desc));
-            if (!memcmp(&desc.AdapterLuid, &deviceId.deviceLUID, sizeof(LUID))) {
-                const std::string deviceName = xr::wide_to_utf8(desc.Description);
-
-                TraceLoggingWrite(g_traceProvider,
-                                  "xrCreateSession",
-                                  TLArg("Vulkan", "Api"),
-                                  TLArg(deviceName.c_str(), "AdapterName"));
-                Log("Using Vulkan on adapter: %s\n", deviceName.c_str());
-                break;
-            }
-        }
-
-        if (memcmp(&deviceId.deviceLUID, &m_adapterLuid, sizeof(LUID))) {
-            return XR_ERROR_GRAPHICS_DEVICE_INVALID;
-        }
-
-#else
         VkPhysicalDeviceIDProperties deviceId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
         VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &deviceId};
         m_vkDispatch.vkGetPhysicalDeviceProperties2(vkBindings.physicalDevice, &properties);
@@ -575,14 +496,9 @@ namespace opendesk_openxr {
                 physicalDevice = match;
             }
         }
-#endif
         m_vkInstance = vkBindings.instance;
         m_vkDevice = vkBindings.device;
-#ifdef _WIN32
-        m_vkPhysicalDevice = vkBindings.physicalDevice;
-#else
         m_vkPhysicalDevice = physicalDevice;
-#endif
 
         // Create the interop device and resources that OVR will be using.
         initializeSubmissionDevice("Vulkan");
@@ -593,31 +509,9 @@ namespace opendesk_openxr {
         Log("Vulkan session resources ready\n");
         m_vkDispatch.vkGetDeviceQueue(m_vkDevice, vkBindings.queueFamilyIndex, vkBindings.queueIndex, &m_vkQueue);
 
-#ifdef _WIN32
-        // We will use a shared fence to synchronize between the Vulkan queue and the D3D11
-        // context.
-        wil::unique_handle fenceHandle;
-        CHECK_HRCMD(m_ovrSubmissionFence->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, fenceHandle.put()));
-
-        // On the Vulkan side, it is called a timeline semaphore.
-        {
-            VkSemaphoreTypeCreateInfo timelineCreateInfo{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-            timelineCreateInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-            VkSemaphoreCreateInfo createInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &timelineCreateInfo};
-            CHECK_VKCMD(m_vkDispatch.vkCreateSemaphore(
-                m_vkDevice, &createInfo, m_vkAllocator ? &m_vkAllocator.value() : nullptr, &m_vkTimelineSemaphore));
-        }
-        VkImportSemaphoreWin32HandleInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-        importInfo.semaphore = m_vkTimelineSemaphore;
-        importInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D11_FENCE_BIT;
-        importInfo.handle = fenceHandle.get();
-        CHECK_VKCMD(m_vkDispatch.vkImportSemaphoreWin32HandleKHR(m_vkDevice, &importInfo));
-
-#else
         // Linux: libovr-opendesk composites on the app's own queue, in submission order
         m_vkQueueFamilyIndex = vkBindings.queueFamilyIndex;
         bindVulkanToOVRSession();
-#endif
         // Create an additional semaphore for host-side wait.
         {
             VkFenceCreateInfo createInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -655,7 +549,6 @@ namespace opendesk_openxr {
     }
 
     // Initialize the function pointers for the Vulkan instance.
-#ifndef _WIN32
     // Also after enterVisibleMode(): with XR_MND_headless enabled, xrCreateSession re-creates the OVR session after the
     // binding was handled, and the new session would know nothing of the app's Vulkan objects (RiftLift's bridge:
     // its first swapchain aborted in vkGetPhysicalDeviceMemoryProperties).
@@ -664,7 +557,6 @@ namespace opendesk_openxr {
         CHECK_OVRCMD(ovrvd_SetSessionPhysicalDeviceVk(m_ovrSession, m_vkInstance, m_vkPhysicalDevice));
         CHECK_OVRCMD(ovr_SetSynchronizationQueueVk(m_ovrSession, m_vkQueue));
     }
-#endif
 
     void OpenXrRuntime::initializeVulkanDispatch(VkInstance instance) {
         PFN_vkGetInstanceProcAddr getProcAddr =
@@ -692,19 +584,11 @@ namespace opendesk_openxr {
         VK_GET_PTR(vkCmdResetQueryPool);
         VK_GET_PTR(vkCmdWriteTimestamp);
         VK_GET_PTR(vkEndCommandBuffer);
-#ifdef _WIN32
-        VK_GET_PTR(vkGetMemoryWin32HandlePropertiesKHR);
-#else
         VK_GET_PTR(vkGetMemoryFdPropertiesKHR);
-#endif
         VK_GET_PTR(vkBindImageMemory);
         VK_GET_PTR(vkCreateSemaphore);
         VK_GET_PTR(vkDestroySemaphore);
-#ifdef _WIN32
-        VK_GET_PTR(vkImportSemaphoreWin32HandleKHR);
-#else
         VK_GET_PTR(vkImportSemaphoreFdKHR);
-#endif
         VK_GET_PTR(vkCreateFence);
         VK_GET_PTR(vkDestroyFence);
         VK_GET_PTR(vkResetFences);
@@ -762,196 +646,6 @@ namespace opendesk_openxr {
     }
 
     // Retrieve the swapchain images (VkImage) for the application to use.
-#ifdef _WIN32
-    XrResult OpenXrRuntime::getSwapchainImagesVulkan(Swapchain& xrSwapchain,
-                                                     XrSwapchainImageVulkanKHR* vkImages,
-                                                     uint32_t count) {
-        // Detect whether this is the first call for this swapchain.
-        const bool initialized = !xrSwapchain.appSwapchain.images.empty();
-
-        const bool needTransition = xrSwapchain.xrDesc.usageFlags & (XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
-                                                                     XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
-
-        std::vector<HANDLE> textureHandles;
-        if (!initialized) {
-            // Query the swapchain textures.
-            textureHandles = getSwapchainImages(xrSwapchain);
-
-            if (needTransition) {
-                // We keep our code simple by only using a single command buffer, which means we must wait before
-                // reusing it.
-                flushVulkanCommandQueue();
-
-                // Prepare to execute layout transitions.
-                VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-                beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                CHECK_VKCMD(m_vkDispatch.vkBeginCommandBuffer(m_vkCmdBuffer, &beginInfo));
-            }
-        }
-
-        // Helper to select the memory type.
-        auto findMemoryType = [&](uint32_t memoryTypeBitsRequirement, VkFlags requirementsMask) {
-            for (uint32_t memoryIndex = 0; memoryIndex < VK_MAX_MEMORY_TYPES; ++memoryIndex) {
-                const uint32_t memoryTypeBits = (1 << memoryIndex);
-                const bool isRequiredMemoryType = memoryTypeBitsRequirement & memoryTypeBits;
-                const bool satisfiesFlags = (m_vkMemoryProperties.memoryTypes[memoryIndex].propertyFlags &
-                                             requirementsMask) == requirementsMask;
-
-                if (isRequiredMemoryType && satisfiesFlags) {
-                    return memoryIndex;
-                }
-            }
-
-            CHECK_VKCMD(VK_ERROR_UNKNOWN);
-            return 0u;
-        };
-
-        // Export each D3D11 texture to Vulkan.
-        for (uint32_t i = 0; i < count; i++) {
-            if (vkImages[i].type != XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR) {
-                return XR_ERROR_VALIDATION_FAILURE;
-            }
-
-            if (!initialized) {
-                // Create an imported texture on the Vulkan device.
-                VkImage image;
-                {
-                    VkExternalMemoryImageCreateInfo externalCreateInfo{
-                        VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
-                    externalCreateInfo.handleTypes = !requireNTHandleSharing()
-                                                         ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_KMT_BIT
-                                                         : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-
-                    VkImageCreateInfo createInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &externalCreateInfo};
-                    createInfo.imageType = VK_IMAGE_TYPE_2D;
-                    createInfo.format = (VkFormat)xrSwapchain.xrDesc.format;
-                    createInfo.extent.width = xrSwapchain.xrDesc.width;
-                    createInfo.extent.height = xrSwapchain.xrDesc.height;
-                    createInfo.extent.depth = 1;
-                    createInfo.mipLevels = xrSwapchain.xrDesc.mipCount;
-                    createInfo.arrayLayers = xrSwapchain.xrDesc.arraySize;
-                    createInfo.samples = (VkSampleCountFlagBits)xrSwapchain.xrDesc.sampleCount;
-                    createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-                    createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_SAMPLED_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT) {
-                        createInfo.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_MUTABLE_FORMAT_BIT) {
-                        createInfo.usage |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
-                    }
-                    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-                    CHECK_VKCMD(m_vkDispatch.vkCreateImage(
-                        m_vkDevice, &createInfo, m_vkAllocator ? &m_vkAllocator.value() : nullptr, &image));
-                }
-                xrSwapchain.vkImages.push_back(image);
-
-                // Import the device memory from D3D.
-                VkDeviceMemory memory;
-                {
-                    VkImageMemoryRequirementsInfo2 requirementInfo{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};
-                    requirementInfo.image = image;
-                    VkMemoryRequirements2 requirements{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
-                    m_vkDispatch.vkGetImageMemoryRequirements2KHR(m_vkDevice, &requirementInfo, &requirements);
-
-                    VkMemoryWin32HandlePropertiesKHR handleProperties{
-                        VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
-                    CHECK_VKCMD(m_vkDispatch.vkGetMemoryWin32HandlePropertiesKHR(
-                        m_vkDevice,
-                        !requireNTHandleSharing() ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_KMT_BIT
-                                                  : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT,
-                        textureHandles[i],
-                        &handleProperties));
-
-                    VkImportMemoryWin32HandleInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
-                    importInfo.handleType = !requireNTHandleSharing()
-                                                ? VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_KMT_BIT
-                                                : VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-                    importInfo.handle = textureHandles[i];
-
-                    VkMemoryDedicatedAllocateInfo memoryAllocateInfo{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-                                                                     &importInfo};
-                    memoryAllocateInfo.image = image;
-
-                    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &memoryAllocateInfo};
-                    allocateInfo.allocationSize = requirements.memoryRequirements.size;
-                    allocateInfo.memoryTypeIndex =
-                        findMemoryType(handleProperties.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-
-                    CHECK_VKCMD(m_vkDispatch.vkAllocateMemory(
-                        m_vkDevice, &allocateInfo, m_vkAllocator ? &m_vkAllocator.value() : nullptr, &memory));
-                }
-                xrSwapchain.vkDeviceMemory.push_back(memory);
-
-                CHECK_VKCMD(m_vkDispatch.vkBindImageMemory(m_vkDevice, image, memory, 0));
-
-                if (needTransition) {
-                    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) {
-                        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    }
-                    if (xrSwapchain.xrDesc.usageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) {
-                        barrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-                        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-                    }
-                    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    barrier.image = image;
-                    barrier.subresourceRange.baseMipLevel = 0;
-                    barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-                    barrier.subresourceRange.baseArrayLayer = 0;
-                    barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-
-                    m_vkDispatch.vkCmdPipelineBarrier(m_vkCmdBuffer,
-                                                      VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                                      VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT,
-                                                      0,
-                                                      0,
-                                                      (VkMemoryBarrier*)nullptr,
-                                                      0,
-                                                      (VkBufferMemoryBarrier*)nullptr,
-                                                      1,
-                                                      &barrier);
-                }
-            }
-
-            vkImages[i].image = xrSwapchain.vkImages[i];
-
-            TraceLoggingWrite(g_traceProvider,
-                              "xrEnumerateSwapchainImages",
-                              TLArg("Vulkan", "Api"),
-                              TLXArg(vkImages[i].image, "Texture"));
-        }
-
-        if (!initialized && needTransition) {
-            // Transition all images to the desired state.
-            CHECK_VKCMD(m_vkDispatch.vkEndCommandBuffer(m_vkCmdBuffer));
-            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-            submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &m_vkCmdBuffer;
-            CHECK_VKCMD(m_vkDispatch.vkQueueSubmit(m_vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
-        }
-
-        return XR_SUCCESS;
-    }
-
-#else
     // Linux: the images are libovr-opendesk's, created on the app's device - hand them out as they are
     XrResult OpenXrRuntime::getSwapchainImagesVulkan(Swapchain& xrSwapchain,
                                                      XrSwapchainImageVulkanKHR* vkImages,
@@ -968,23 +662,8 @@ namespace opendesk_openxr {
         return XR_SUCCESS;
     }
 
-#endif
     void OpenXrRuntime::cleanupSwapchainImagesVulkan(Swapchain& xrSwapchain) {
-#ifdef _WIN32
-        while (!xrSwapchain.vkImages.empty()) {
-            m_vkDispatch.vkDestroyImage(
-                m_vkDevice, xrSwapchain.vkImages.back(), m_vkAllocator ? &m_vkAllocator.value() : nullptr);
-            xrSwapchain.vkImages.pop_back();
-        }
-
-        while (!xrSwapchain.vkDeviceMemory.empty()) {
-            m_vkDispatch.vkFreeMemory(
-                m_vkDevice, xrSwapchain.vkDeviceMemory.back(), m_vkAllocator ? &m_vkAllocator.value() : nullptr);
-            xrSwapchain.vkDeviceMemory.pop_back();
-        }
-#else
         xrSwapchain.vkImages.clear(); // owned by libovr-opendesk
-#endif
     }
 
     // Wait for all pending commands to finish.
@@ -1000,20 +679,6 @@ namespace opendesk_openxr {
 
     // Serialize commands from the Vulkan queue to the D3D11 context used by OVR.
     void OpenXrRuntime::serializeVulkanFrame() {
-#ifdef _WIN32
-        m_fenceValue++;
-        TraceLoggingWrite(
-            g_traceProvider, "xrEndFrame_Sync", TLArg("Vulkan", "Api"), TLArg(m_fenceValue, "FenceValue"));
-        VkTimelineSemaphoreSubmitInfo timelineInfo{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-        timelineInfo.signalSemaphoreValueCount = 1;
-        timelineInfo.pSignalSemaphoreValues = &m_fenceValue;
-        VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO, &timelineInfo};
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = &m_vkTimelineSemaphore;
-        CHECK_VKCMD(m_vkDispatch.vkQueueSubmit(m_vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
-
-        waitOnSubmissionDevice();
-#endif
     }
 
 } // namespace opendesk_openxr

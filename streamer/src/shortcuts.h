@@ -5,9 +5,7 @@
 #include <QObject>
 #include <QVariantMap>
 
-#ifndef _WIN32
 #include <QDBusObjectPath>
-#endif
 
 class GlobalShortcuts : public QObject
 {
@@ -21,7 +19,6 @@ public:
 signals:
 	void activated(QString action); // BindingAction name, e.g. "ToggleVRPassthrough"
 
-#ifndef _WIN32
 private slots:
 	void onResponse(uint response, const QVariantMap & results);
 	void onActivated(const QDBusObjectPath & session, const QString & id, qulonglong timestamp, const QVariantMap & options);
@@ -32,5 +29,4 @@ private:
 	QString requestPath_;
 	int counter_ = 0;
 	bool bindPending_ = false;
-#endif
 };

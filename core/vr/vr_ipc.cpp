@@ -1,4 +1,3 @@
-#ifndef _WIN32 // vr_ipc_win.cpp on Windows
 #include "vr_ipc.h"
 
 #include <cstdlib>
@@ -48,4 +47,3 @@ bool ipc::service_available()
 	return false;
 }
 } // namespace od
-#endif

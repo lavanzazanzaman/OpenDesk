@@ -20,15 +20,10 @@
 #include <map>
 #include <optional>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#endif
 
 namespace od
 {
@@ -348,13 +343,8 @@ std::string osc_message(const std::string & address, const std::string & tags, c
 struct face_tracking::impl
 {
 	std::function<void(const std::string &)> log;
-#ifdef _WIN32
-	using socket_t = SOCKET;
-	static constexpr socket_t no_socket = INVALID_SOCKET;
-#else
 	using socket_t = int;
 	static constexpr socket_t no_socket = -1;
-#endif
 	socket_t sock = no_socket, recv_sock = no_socket;
 	sockaddr_in target{};
 	std::vector<named> parameters = v2_parameters();
@@ -396,11 +386,7 @@ struct face_tracking::impl
 	{
 		if (sock == no_socket)
 			return;
-#ifdef _WIN32
-		sendto(sock, packet.data(), int(packet.size()), 0, reinterpret_cast<const sockaddr *>(&target), sizeof(target));
-#else
 		sendto(sock, packet.data(), packet.size(), MSG_DONTWAIT, reinterpret_cast<const sockaddr *>(&target), sizeof(target));
-#endif
 	}
 
 	static std::vector<QString> osc_roots()
@@ -647,41 +633,21 @@ face_tracking::face_tracking(std::function<void(const std::string &)> log, std::
         p(std::make_unique<impl>())
 {
 	p->log = std::move(log);
-#ifdef _WIN32
-	WSADATA wsa{};
-	WSAStartup(MAKEWORD(2, 2), &wsa);
-	p->sock = socket(AF_INET, SOCK_DGRAM, 0);
-#else
 	p->sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-#endif
 	p->target.sin_family = AF_INET;
 	if (const char * test_port = std::getenv("OPENDESK_FACE_OSC_PORT")) // tests
 		port = std::atoi(test_port);
 	p->target.sin_port = htons(uint16_t(port));
 	inet_pton(AF_INET, host.c_str(), &p->target.sin_addr);
 	// VRChat announces avatar changes on udp 9001 (VRCFaceTracking listens there too: then we see the files only)
-#ifdef _WIN32
-	p->recv_sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (p->recv_sock != impl::no_socket)
-	{
-		u_long nonblocking = 1;
-		ioctlsocket(p->recv_sock, FIONBIO, &nonblocking);
-	}
-#else
 	p->recv_sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-#endif
 	sockaddr_in local{};
 	local.sin_family = AF_INET;
 	local.sin_port = htons(9001);
 	local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	if (p->recv_sock == impl::no_socket || bind(p->recv_sock, reinterpret_cast<sockaddr *>(&local), sizeof(local)) != 0)
 	{
-#ifdef _WIN32
-		if (p->recv_sock != impl::no_socket)
-			closesocket(p->recv_sock);
-#else
 		close(p->recv_sock);
-#endif
 		p->recv_sock = impl::no_socket;
 		p->log("[face] udp 9001 is taken (VRCFaceTracking running?): following VRChat's avatar config files only");
 	}
@@ -690,18 +656,10 @@ face_tracking::face_tracking(std::function<void(const std::string &)> log, std::
 
 face_tracking::~face_tracking()
 {
-#ifdef _WIN32
-	if (p->sock != impl::no_socket)
-		closesocket(p->sock);
-	if (p->recv_sock != impl::no_socket)
-		closesocket(p->recv_sock);
-	WSACleanup();
-#else
 	if (p->sock != impl::no_socket)
 		close(p->sock);
 	if (p->recv_sock != impl::no_socket)
 		close(p->recv_sock);
-#endif
 }
 
 bool face_tracking::unify(const uint8_t * d, size_t size, shape_data & out)
@@ -849,7 +807,7 @@ void face_tracking::on_frame_data(const uint8_t * d, size_t size)
 
 namespace
 {
-// Linux: VRChat under Proton, a process whose command line names VRChat.exe. Windows: VRChat.exe itself.
+// VRChat under Proton: a process whose command line names VRChat.exe.
 bool vrchat_process()
 {
 	return platform::any_process_has("VRChat.exe");
@@ -875,11 +833,7 @@ void face_tracking::tick()
 		for (;;)
 		{
 			char buf[2048];
-#ifdef _WIN32
-			int n = recv(p->recv_sock, buf, int(sizeof(buf)), 0);
-#else
 			ssize_t n = recv(p->recv_sock, buf, sizeof(buf), 0);
-#endif
 			if (n <= 0)
 				break;
 			std::string msg(buf, size_t(n));

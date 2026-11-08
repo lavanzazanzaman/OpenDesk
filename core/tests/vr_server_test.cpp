@@ -1,5 +1,5 @@
 // Runs the VR server alone with a sink that only counts frames (no headset, no encoder): pairs with vr-test-client to
-// check the transport (Windows: named pipe + NT handles).
+// check the transport.
 //   vr-server-test [SECONDS]
 #include "hardware_encoder.h" // vr_render_node
 #include "vr_server.h"

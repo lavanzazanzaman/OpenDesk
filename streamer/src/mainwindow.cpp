@@ -3,6 +3,10 @@
 #include <algorithm>
 #include "pages.h"
 #include "settings.h"
+#include "updater.h"
+
+#include <QPushButton>
+#include <QTimer>
 #include "setup.h"
 #include "shortcuts.h"
 
@@ -223,7 +227,27 @@ QWidget * MainWindow::makeFooter()
 	h->addWidget(statusDot_);
 	h->addWidget(statusText_);
 	h->addStretch();
+	auto * restart = new QPushButton;
+	restart->setObjectName("footerUpdate");
+	restart->hide();
+	connect(restart, &QPushButton::clicked, this, [] { Updater::instance().restart(); });
+	auto showUpdate = [restart] {
+		auto & u = Updater::instance();
+		restart->setVisible(u.state() == Updater::State::Ready);
+		restart->setText(QString("Restart to use v%1").arg(u.newVersion()));
+	};
+	connect(&Updater::instance(), &Updater::changed, restart, showUpdate);
+	h->addWidget(restart);
 	h->addWidget(version);
+	// AppImage: new releases arrive in the background; restarting stays the user's call
+	auto * updateTimer = new QTimer(this);
+	auto checkUpdate = [] {
+		if (StreamerSettings::instance().autoUpdate)
+			Updater::instance().check(true);
+	};
+	connect(updateTimer, &QTimer::timeout, this, checkUpdate);
+	updateTimer->start(6 * 60 * 60 * 1000);
+	QTimer::singleShot(8000, this, checkUpdate);
 	connect(&engine_, &Engine::statusChanged, this, &MainWindow::updateFooter);
 	connect(&engine_, &Engine::headsetChanged, this, &MainWindow::updateFooter);
 	updateFooter();

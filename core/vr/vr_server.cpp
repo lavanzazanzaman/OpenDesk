@@ -1,4 +1,3 @@
-#ifndef _WIN32 // the Windows transport is in vr_server_win.cpp
 #include "vr_server.h"
 #include "hardware_encoder.h"
 
@@ -405,4 +404,3 @@ void vr_server::run()
     submitted = false;
 }
 } // namespace od
-#endif

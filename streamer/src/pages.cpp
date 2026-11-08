@@ -2,13 +2,9 @@
 #include "engine.h"
 #include "hardware_encoder.h"
 #include "settings.h"
+#include "updater.h"
 #include "setup.h"
 #include "sysinfo.h"
-#ifdef _WIN32
-#include "dxvk_win.h"
-#include "games.h"
-#include <QListWidget>
-#endif
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -537,20 +533,10 @@ QWidget * makeStreamingPage(Engine & engine)
 	std::vector<std::string> nodes{vr_node};
 	if (desktop_node != vr_node)
 		nodes.push_back(desktop_node);
-	bool nvidia = false, amd = false;
-	for (const auto & n: nodes)
-	{
-		nvidia |= od::gpu_vendor(n) == 0x10de;
-		amd |= od::gpu_vendor(n) == 0x1002;
-	}
 	auto gpus = od::list_gpus();
 	if (qEnvironmentVariableIsSet("OPENDESK_TEST_ONE_GPU") && gpus.size() > 1) // (screenshots)
 		gpus.resize(1);
-	for (const auto & g: gpus) // (with two cards, either can become the encoder)
-	{
-		nvidia |= g.vendor == 0x10de;
-		amd |= g.vendor == 0x1002;
-	}
+	std::function<void()> syncEncoder; // greys out what the card that encodes VR can't use
 
 	auto * video = card(p, "Video encoding");
 	auto * codecs = combo<VideoCodec>(170,
@@ -566,15 +552,14 @@ QWidget * makeStreamingPage(Engine & engine)
 	row(video, "Preferred codec", "Only codecs your GPU can encode are listed", codecs,
 	    "H.264+ streams VR as several H.264 slices. 10-bit reduces banding in dark gradients.");
 	{
-		// (VAAPI on Intel has neither: shown greyed out, see below)
-		if (amd)
-			row(video, "AMD encoder speed", "Try them and compare the encoder load above",
-			    combo<int>(170, {{0, "Speed"}, {1, "Balanced"}, {2, "Quality"}}, s.amdEncoderSpeed, apply),
-			    "The AMD encoder's quality preset. Applies to the next frames of the stream");
-		auto * aq = toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes", s.enableAQ, apply,
-		                      nvidia ? "NVENC spatial adaptive quantization" : "AMD VBAQ (variance-based adaptive quantization)");
-		auto * two_pass = toggleRow(video, "2-pass encoding", "Better quality per bit", s.enable2Pass, apply,
-		                            nvidia ? "NVENC quarter-resolution two-pass rate control" : "AMD pre-encode analysis");
+		// one speed choice per vendor: the one for the card that encodes (see syncEncoder)
+		auto speedRow = [&](const char * title, const char * tip, QComboBox * box) { return row(video, title, " ", box, tip); };
+		auto * nvidiaSpeed = speedRow("NVIDIA encoder speed", "NVENC preset: Speed is P1, Balanced P4, Quality P6. Applies to the next stream",
+		                              combo<int>(170, {{1, "Speed"}, {4, "Balanced"}, {6, "Quality"}}, s.nvencPreset, apply));
+		auto * amdSpeed = speedRow("AMD encoder speed", "The AMD encoder's quality preset. Applies to the next frames of the stream",
+		                           combo<int>(170, {{0, "Speed"}, {1, "Balanced"}, {2, "Quality"}}, s.amdEncoderSpeed, apply));
+		auto * aq = toggleRow(video, "Adaptive quantization", "Fewer compression artifacts in dark scenes", s.enableAQ, apply);
+		auto * two_pass = toggleRow(video, "2-pass encoding", "Better quality per bit", s.enable2Pass, apply);
 
 		// VR encoder load: the measured time per frame, and what each option costs at this resolution
 		auto * load = card(p, "VR encoder load");
@@ -600,9 +585,10 @@ QWidget * makeStreamingPage(Engine & engine)
 		auto * verdict = time_row->findChild<QLabel *>("settingDescription");
 		auto * aq_text = aq->findChild<QLabel *>("settingDescription");
 		auto * pass_text = two_pass->findChild<QLabel *>("settingDescription");
-		const bool supported = amd || nvidia;
-		auto refresh = [&engine, bar, value, verdict, aq_text, pass_text, supported] {
+		auto refresh = [&engine, bar, value, verdict, aq_text, pass_text] {
 			auto & st = StreamerSettings::instance();
+			const int vendor = od::gpu_vendor(od::vr_encode_node());
+			const bool supported = vendor == 0x10de || vendor == 0x1002;
 			const auto & e = engine.lastEncodeStats;
 			const bool known = !e.isEmpty(), nvenc = known && e["nvenc"].toBool();
 			// measured with NVENC on a two-card setup: ms per megapixel of the encoded images
@@ -643,21 +629,35 @@ QWidget * makeStreamingPage(Engine & engine)
 			}
 			verdict->setText(text);
 		};
-		if (!amd && !nvidia)
-		{
-			const QString notice("Not supported by this graphics card's encoder");
-			for (QWidget * r: {aq, two_pass})
-			{
-				r->findChild<QLabel *>("settingDescription")->setText(notice);
-				r->setEnabled(false);
-				for (QLabel * l: r->findChildren<QLabel *>())
-					l->setToolTip(notice);
-			}
-		}
-		else
+		syncEncoder = [&engine, nvidiaSpeed, amdSpeed, aq, two_pass, refresh, gpus] {
+			engine.applyGpuSelection();
+			const std::string node = od::vr_encode_node();
+			const int vendor = od::gpu_vendor(node);
+			const bool nvenc = vendor == 0x10de, amf = vendor == 0x1002;
+			QString name = "this graphics card";
+			for (const auto & g: gpus)
+				if (g.node == node)
+					name = QString::fromStdString(g.name);
+			auto describe = [](QWidget * r, bool on, const QString & text) {
+				r->setEnabled(on);
+				r->findChild<QLabel *>("settingDescription")->setText(text);
+			};
+			const QString try_them("Try them and compare the encoder load above"), other = QString("Not used: VR encodes on %1").arg(name);
+			describe(nvidiaSpeed, nvenc, nvenc ? try_them : other);
+			describe(amdSpeed, amf, amf ? try_them : other);
+			const QString missing("Not supported by this graphics card's encoder");
+			if (!nvenc && !amf)
+				for (QWidget * r: {aq, two_pass})
+					describe(r, false, missing);
+			else
+				for (QWidget * r: {aq, two_pass})
+					r->setEnabled(true);
+			aq->setToolTip(nvenc ? "NVENC spatial adaptive quantization" : amf ? "AMD VBAQ (variance-based adaptive quantization)" : missing);
+			two_pass->setToolTip(nvenc ? "NVENC quarter-resolution two-pass rate control" : amf ? "AMD pre-encode analysis" : missing);
 			refresh();
-		if (amd || nvidia)
-			QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, bar, refresh);
+		};
+		syncEncoder();
+		QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, bar, syncEncoder);
 		QObject::connect(&engine, &Engine::encodeStatsChanged, bar, refresh);
 		auto * tick = new QTimer(bar); // "last session" once the numbers stop coming
 		QObject::connect(tick, &QTimer::timeout, bar, refresh);
@@ -669,11 +669,7 @@ QWidget * makeStreamingPage(Engine & engine)
 		static bool unused = false; // (never on: the switch is disabled)
 		auto * cards = card(p, "Graphics cards");
 		auto * dual = toggleRow(cards, "Use two graphics cards",
-#ifdef _WIN32
-		                        "Only available on Linux for now",
-#else
 		                        gpus.empty() ? QString("Needs two graphics cards") : QString("Needs two graphics cards. This PC has one: %1").arg(QString::fromStdString(gpus[0].name)),
-#endif
 		                        unused);
 		dual->setEnabled(false);
 	}
@@ -691,9 +687,11 @@ QWidget * makeStreamingPage(Engine & engine)
 					s.streamingGpu = QString::fromStdString(g.pci);
 		}
 		auto * cards = card(p, "Graphics cards");
-		auto picker = [&gpus](QString & field, std::function<void()> after) {
+		auto picker = [&gpus](QString & field, std::function<void()> after, const QString & automatic = {}) {
 			auto * c = new QComboBox;
 			c->setFixedWidth(260);
+			if (!automatic.isEmpty())
+				c->addItem(automatic, QString(""));
 			for (const auto & g: gpus)
 				c->addItem(QString::fromStdString(g.name), QString::fromStdString(g.pci));
 			auto sync = [c, &field] {
@@ -710,8 +708,9 @@ QWidget * makeStreamingPage(Engine & engine)
 			return c;
 		};
 		// the encoders of the newly chosen cards decide which codecs are offered
-		auto gpus_changed = [&engine, codecs, apply] {
+		auto gpus_changed = [&engine, codecs, apply, syncEncoder] {
 			engine.applyGpuSelection();
+			syncEncoder();
 			std::vector<std::string> now{od::vr_encode_node()};
 			if (const std::string d = od::desktop_encode_node(); d != now[0])
 				now.push_back(d);
@@ -721,12 +720,20 @@ QWidget * makeStreamingPage(Engine & engine)
 		toggleRow(cards, "Use two graphics cards", "One card runs the games, the other encodes the stream", s.dualGpu, gpus_changed,
 		          "The game keeps all of its card, frames are copied to the streaming card over PCIe.\n"
 		          "That copy needs a fast slot for the streaming card. Close VR games before changing this.");
+		// one card (the usual case): the main screen's, unless the user picks another
+		QString automatic = "Automatic";
+		const std::string main_node = od::auto_vr_render_node();
+		for (const auto & g: gpus)
+			if (g.node == main_node)
+				automatic = QString("Automatic (%1)").arg(QString::fromStdString(g.name));
+		auto * single = row(cards, "Graphics card", "Runs and encodes VR games (the desktop stays on the display's card)", picker(s.singleGpu, gpus_changed, automatic));
 		auto * game = row(cards, "Game card", "VR games render here", picker(s.gameGpu, gpus_changed));
 		auto * streaming = row(cards, "Streaming card", "Encodes VR games for the headset (the desktop stays on the display's card)", picker(s.streamingGpu, gpus_changed));
-		auto sync_enabled = [game, streaming] {
+		auto sync_enabled = [single, game, streaming] {
 			const bool on = StreamerSettings::instance().dualGpu;
-			game->setEnabled(on);
-			streaming->setEnabled(on);
+			single->setVisible(!on);
+			game->setVisible(on);
+			streaming->setVisible(on);
 		};
 		sync_enabled();
 		QObject::connect(&StreamerSettings::instance(), &StreamerSettings::changed, game, sync_enabled);
@@ -812,72 +819,8 @@ QWidget * makeVRPage(Engine & engine)
 	          "Off: a hard edge between the sharp area and the periphery. Takes effect right away");
 
 	auto * perf = card(p, "Performance");
-#ifdef _WIN32
-	toggleRow(perf, "Boost game priority", "Only if games freeze or stutter", s.boostGamePriority, apply,
-	          "Raises the priority of the game's render thread (highest thread priority, process above normal).\n"
-	          "Takes effect right away");
-
-	// DXVK per game: Direct3D 11 games rendered through Vulkan
-	auto * dxvk_games = new QListWidget;
-	dxvk_games->setMinimumHeight(140);
-	dxvk_games->setToolTip("Checked games run with DXVK: OpenDesk places DXVK's d3d11.dll and dxgi.dll next to the game and removes\n"
-	                       "them again when unchecked. Games with anti-cheat may refuse modified files - leave those unchecked.\n"
-	                       "Takes effect the next time the game starts");
-	auto fill_dxvk = [dxvk_games](std::vector<od::game_entry> games) {
-		QSignalBlocker block(dxvk_games);
-		dxvk_games->clear();
-		auto & st = StreamerSettings::instance();
-		for (const auto & g: games)
-		{
-			if (g.install_dir.isEmpty())
-				continue;
-			auto * item = new QListWidgetItem(g.name, dxvk_games);
-			item->setData(Qt::UserRole, od::dxvk::game_key(g));
-			item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-			item->setCheckState(od::dxvk::wanted(g, st.dxvkByDefault, st.dxvkGames) ? Qt::Checked : Qt::Unchecked);
-		}
-		if (games.empty())
-			new QListWidgetItem("No VR games found", dxvk_games);
-	};
-	QObject::connect(dxvk_games, &QListWidget::itemChanged, dxvk_games, [&engine](QListWidgetItem * item) {
-		const QString key = item->data(Qt::UserRole).toString();
-		if (key.isEmpty())
-			return;
-		auto & st = StreamerSettings::instance();
-		st.dxvkGames[key] = item->checkState() == Qt::Checked;
-		st.save();
-		engine.applyOptions();
-	});
-	toggleRow(perf, "DXVK by default", "Direct3D 11 games render through Vulkan unless set below", s.dxvkByDefault,
-	          [&engine, dxvk_games] {
-		          auto & st = StreamerSettings::instance();
-		          for (int i = 0; i < dxvk_games->count(); ++i) // games without their own setting follow
-		          {
-			          auto * item = dxvk_games->item(i);
-			          const QString key = item->data(Qt::UserRole).toString();
-			          if (!key.isEmpty() && !st.dxvkGames.contains(key))
-			          {
-				          QSignalBlocker block(dxvk_games);
-				          item->setCheckState(st.dxvkByDefault ? Qt::Checked : Qt::Unchecked);
-			          }
-		          }
-		          engine.applyOptions();
-	          });
-	perf->addWidget(dxvk_games);
-	{
-		QPointer<QListWidget> list(dxvk_games);
-		std::thread([list, fill_dxvk] {
-			auto games = od::scan_games(); // reads the Steam / Oculus libraries: off the UI thread
-			QMetaObject::invokeMethod(qApp, [list, fill_dxvk, games = std::move(games)]() mutable {
-				if (list)
-					fill_dxvk(std::move(games));
-			});
-		}).detach();
-	}
-#else
 	toggleRow(perf, "Boost game priority", "Only if games freeze or stutter", s.boostGamePriority, apply,
 	          "Raises the CPU priority of the game's render thread (through rtkit). Takes effect right away");
-#endif
 
 	auto * face = card(p, "Face tracking");
 	row(face, "Mouth sensitivity", "How strongly the avatar's mouth follows yours (VRChat)",
@@ -903,11 +846,9 @@ QWidget * makeAudioInputPage(Engine & engine)
 	                           {AudioStreaming::HeadsetOnly, "VR headset only"},
 	                           {AudioStreaming::HeadsetAndComputer, "VR headset & computer"}},
 	                          s.audioStreaming, apply));
-#ifndef _WIN32 // Windows: 'VR headset only' always mutes the PC's output (no virtual device without a driver)
 	toggleRow(audio, "Use virtual audio device", "With 'VR headset only', PC sound goes to an 'OpenDesk Audio' device",
 	          s.useVirtualAudioDriver, apply,
 	          "Enable this option if you experience issues streaming audio. Off: the real output is muted instead");
-#endif
 	toggleRow(audio, "Select the headset microphone", "Makes it the default input while microphone passthrough is on",
 	          s.autoSelectMicrophone, apply);
 
@@ -933,13 +874,40 @@ QWidget * makeGeneralPage(Engine & engine)
 	auto p = settingsPage([] { StreamerSettings::instance().resetGeneral(); });
 
 	auto * startup = card(p, "Startup");
-#ifdef _WIN32
-	toggleRow(startup, "Start with login", "Run the streamer when you sign in", s.startWithLogin);
-#else
 	toggleRow(startup, "Start with login", "Run the streamer when you sign in", s.startWithLogin,
 	          [] { setAutostart(StreamerSettings::instance().startWithLogin); }, "Adds an XDG autostart entry (~/.config/autostart)");
-#endif
 	toggleRow(startup, "Start minimized", "Start in the tray instead of opening this window", s.startMinimizedInTray);
+
+	auto & updater = Updater::instance();
+	const bool canUpdate = updater.state() != Updater::State::Unsupported;
+	auto * updates = card(p, "Updates");
+	auto * autoRow = toggleRow(updates, "Automatic updates",
+	                           canUpdate ? "Download new releases in the background and ask before restarting" : "Only available in the AppImage", s.autoUpdate,
+	                           {}, "Asks GitHub for the latest release at startup and every few hours");
+	autoRow->setEnabled(canUpdate);
+	auto * action = new QPushButton;
+	action->setFixedWidth(120);
+	auto * statusRow = row(updates, "Version " OPENDESK_VERSION, " ", action);
+	auto * statusText = statusRow->findChild<QLabel *>("settingDescription");
+	auto showState = [action, statusText, &updater] {
+		using S = Updater::State;
+		const S state = updater.state();
+		statusText->setText(updater.statusText());
+		action->setText(state == S::Ready ? "Restart now" : state == S::Available ? "Install" : "Check now");
+		action->setEnabled(state != S::Unsupported && state != S::Checking && state != S::Downloading);
+	};
+	QObject::connect(&updater, &Updater::changed, action, showState);
+	QObject::connect(action, &QPushButton::clicked, action, [&updater] {
+		using S = Updater::State;
+		if (updater.state() == S::Ready)
+			updater.restart();
+		else if (updater.state() == S::Available)
+			updater.download();
+		else
+			updater.check(false);
+	});
+	showState();
+	statusRow->setEnabled(canUpdate);
 
 	auto * security = card(p, "Security");
 	toggleRow(security, "Ask for computer access", "Prompt when a new headset searches for computers", s.showPairingRequests);

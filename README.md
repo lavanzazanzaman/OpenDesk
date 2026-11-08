@@ -1,113 +1,111 @@
 # OpenDesk
 
-OpenDesk is an independent, open-source PC-side streamer for standalone VR
-headsets. It speaks the same local-network streaming protocol as the stock
-headset app, so you can use the headset app you already have — no patched
-headset build and no cloud account.
+OpenDesk is an open-source PC streamer for **Linux** that lets the official **Virtual Desktop** headset app connect
+to a Linux PC. Desktop streaming, VR games and audio all run natively, with no Windows machine in the picture.
 
-The project is an independent clean-room implementation. **OpenDesk is unaffiliated with
-Virtual Desktop Inc.** We only provide the PC-side streamer: it works only with
-the paid Virtual Desktop app from Virtual Desktop Inc., and it is useless
-without that app. Wire-protocol identifiers and the protocol XML namespace are
-kept only where compatibility requires them.
+**Linux only for now.**
+
+![The streaming settings](docs/screenshots/streaming.png)
+
+## Please read this first
+
+- **OpenDesk is not affiliated with, endorsed by, or supported by Virtual Desktop Inc.** Please don't send them
+  support requests about it.
+- **OpenDesk is not a port of Virtual Desktop's code.** It is an independent implementation written to interoperate
+  with the headset app, and it contains no code or artwork from Virtual Desktop's applications.
+- **You need the official Virtual Desktop app on your headset** (Quest, Pico and the other headsets it supports),
+  bought from your headset's store. This project does not provide a headset app and never will: it is not an
+  alternative to Virtual Desktop or a competing product. It only adds Linux as a place your existing app can connect to.
+
+Protocol identifiers are kept only where the headset app needs them to connect.
 
 ## Download
 
-Linux builds are published as a portable AppImage on the
-[Releases](https://github.com/lavanzazanzaman/OpenDesk/releases) page. It runs on
-any x86-64 Linux distribution with a Vulkan-capable GPU; no installation is
-needed.
+Get the latest build from [Releases](https://github.com/lavanzazanzaman/OpenDesk/releases):
+
+| Download | Runs on | Updates |
+|---|---|---|
+| `OpenDesk-Linux-x86_64.AppImage` | Any x86-64 distribution with a Vulkan GPU | Updates itself from GitHub releases |
+| `OpenDesk-Linux-x86_64-native.tar.gz` | Recent Arch-based distributions | Download the new version yourself |
+
+To run the AppImage:
+
+```sh
+chmod +x OpenDesk-Linux-x86_64.AppImage
+./OpenDesk-Linux-x86_64.AppImage
+```
+
+The AppImage asks GitHub for the latest release at startup and every few hours, downloads a newer one in the
+background, checks its SHA-256, and then waits for you to restart. You can turn this off under General > Updates.
+On other distributions, [build from source](docs/building.md).
 
 ## What works
 
-| Area | Linux | Windows |
-|---|---|---|
-| Discovery and pairing | ✅ | ✅ |
-| Desktop streaming (H.264 / HEVC / AV1) | ✅ | ✅ |
-| Multi-monitor and virtual displays | ✅ | ✅ (virtual monitors with the [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)) |
-| Keyboard, mouse, touch, laser pointer | ✅ | ✅ |
-| Desktop audio, headset microphone | ✅ | ✅ |
-| Videos tab (local library and playback) | ✅ | ✅ |
-| Games tab | ✅ | ✅ (Steam + Oculus) |
-| OpenXR runtime ("OpenDesk XR": D3D11 / D3D12 / OpenGL / Vulkan games) | ✅ | 🧪 built, hardware testing pending |
-| Face / eye / body tracking to VRChat | ✅ | ✅ |
-| Spacewarp / foveated VR streaming | ✅ | 🧪 built, hardware testing pending |
-| OpenVR games without SteamVR (xrizer) | ✅ | 🧪 built (D3D11 / OpenGL / Vulkan games), hardware testing pending |
-| DXVK per game (Direct3D 11 on Vulkan) | — (Proton) | 🧪 built, hardware testing pending |
+- Discovery and pairing on your local network
+- Desktop streaming in H.264, HEVC and AV1 with hardware encoding (NVIDIA NVENC, AMD and Intel VAAPI)
+- Several monitors, plus virtual monitors that only exist in the headset (KWin)
+- Keyboard, mouse, touch and laser pointer input
+- Desktop audio and the headset microphone
+- The headset's Videos and Games tabs
+- OpenXR VR games through the bundled OpenDesk XR runtime (native and Proton)
+- Face, eye and body tracking, and foveated streaming on headsets that support them
 
-The Linux build is the primary target and is tested against the stock headset
-app. The Windows build runs the same GUI/engine and now includes the VR server,
-VR encoding (NVENC zero-copy through CUDA, AMF/QSV) and the OpenDesk XR runtime;
-those still need testing on real Windows hardware. See
-[`docs/compatibility.md`](docs/compatibility.md) for the protocol-level
-details.
+## Extra features
 
-## Version compatibility
+Things OpenDesk adds on top of what the Windows streamer offers:
 
-The headset app refuses a streamer whose minor version is newer than its own, and asks older streamers to update.
-Headset apps from **1.34.25** send their own version when they search for computers; by default (**Automatic**,
-Advanced tab) OpenDesk reports exactly that version back, so the headset neither refuses the PC nor asks for an update,
-and gets every feature it supports. Older headset apps don't send a version and get **1.20.3**, the lowest version the
-headset app accepts (every app from 1.20.3 onward connects).
+- **Runs natively on Linux**, including Proton games
+- **[RiftLift](https://github.com/Villagers654/RiftLift) support**: Oculus PC games installed through RiftLift appear in
+  the headset's Games tab and launch from there
+- **OpenVR games without SteamVR**, through the bundled [xrizer](https://github.com/Supreeeme/xrizer)
+- **Your choice of graphics card**: run VR on either card, or split it so one renders the game while the other encodes
+- **Live VR encoder load**: the real encode time per frame, and what each quality option costs at your resolution
+- **Encoder speed choice** on both NVIDIA and AMD
+- **Built-in VRChat face tracking** over OSC with adjustable mouth sensitivity, no extra programs needed
+- **Larger fovea** (up to 50%), **adjustable periphery resolution** and an optional **soft fovea edge**
+- **Automatic version matching**, so newer headset apps neither refuse the PC nor ask you to update it
+- **Settings that match your hardware**: options your PC can't use are greyed out with an explanation
 
-Uncheck Automatic to always report the version in **Reported Streamer Version**, or launch with:
+## Not implemented
 
-```
-OPENDESK_STREAMER_VERSION=1.34.23 opendesk-streamer
-```
+These parts of the Windows streamer are left out on purpose:
 
-The setting takes effect on the next connection. The headset's update prompt is declined automatically.
+- **Media tab**: not something this project needs.
+- **Remote connections**: these depend on Virtual Desktop's own online servers, which an unofficial streamer shouldn't
+  connect to. OpenDesk only works on your local network or over USB.
+- **Windows-only options** such as VoiceMeeter mode.
 
-## Build
+[`docs/compatibility.md`](docs/compatibility.md) lists every setting and message and what OpenDesk does with it.
 
-### Linux
+## Screenshots
 
-Dependencies: CMake ≥ 3.25, Ninja, a C++20 compiler, Qt 6 (Widgets, Network,
-DBus), FFmpeg, PipeWire, PulseAudio, libevdev, OpenSSL, Vulkan, EGL/GBM,
-Wayland, and (optionally) X11.
-
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./build/streamer/opendesk-streamer
-```
-
-Install:
-
-```sh
-sudo cmake --install build
-```
-
-A portable AppImage can be built with `tools/build-appimage.sh` (requires
-Docker). Third-party code is vendored under `third_party/`; no submodules are
-needed.
-
-### Windows
-
-Dependencies: MSYS2 (MinGW-w64), Qt 6, FFmpeg, CMake, Ninja, OpenSSL.
-
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-```
-
-The Windows build streams the desktop at full frame rate using DXGI Desktop
-Duplication plus a hardware encoder (NVENC → AMF → QSV → Media Foundation →
-libx264/libx265), with WASAPI audio and SendInput keyboard/mouse/touch
-injection. The Games tab lists Steam titles and Oculus (Meta store) apps
-installed on the PC. The GitHub release workflow builds a portable ZIP and an
-NSIS installer; the OpenXR runtime (VR streaming) is currently Linux-only.
+| | |
+|---|---|
+| ![General](docs/screenshots/general.png) | ![VR](docs/screenshots/vr.png) |
+| ![Audio and input](docs/screenshots/audio-input.png) | ![Accounts](docs/screenshots/accounts.png) |
 
 ## Network
 
-Open these ports on the PC firewall:
+Open these ports on the PC's firewall (the System check window can do this for you):
 
-- UDP 38850 — discovery
-- TCP 38810–38840 — messaging, data, video, audio
+- UDP 38850: discovery
+- TCP 38810-38840: messaging, data, video, audio
 
-Settings live in the platform config directory (`OpenDesk/` on Linux,
-`%APPDATA%\OpenDesk` on Windows). The engine log is written to the platform
-cache directory (`~/.cache/OpenDesk/streamer.log` on Linux).
+Settings are in `~/.config/OpenDesk/`, and the log is at `~/.cache/OpenDesk/streamer.log`.
+
+## Headset version compatibility
+
+The headset app refuses a streamer whose minor version is newer than its own, and asks older streamers to update.
+Headset apps from 1.34.25 onward send their version when they search for computers, and by default OpenDesk reports
+that version back. Older apps get 1.20.3, the lowest version the app accepts. To force a version:
+
+```sh
+OPENDESK_STREAMER_VERSION=1.34.23 opendesk-streamer
+```
+
+## Contributing
+
+Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project layout
 
@@ -115,17 +113,15 @@ cache directory (`~/.cache/OpenDesk/streamer.log` on Linux).
 |---|---|
 | `streamer/` | Qt 6 GUI |
 | `core/` | Native streaming engine (capture, encode, input, audio, protocol) |
-| `runtime/openxr/` | OpenDesk XR OpenXR runtime (derived from VDXR, MIT) |
-| `runtime/libovr-opendesk/` | LibOVR-compatible layer over the streamer's VR IPC |
-| `engine/` | Python reference implementation used by the test suite |
+| `runtime/openxr/` | OpenDesk XR OpenXR runtime, derived from [VDXR](https://github.com/mbucchia/VirtualDesktop-OpenXR) (MIT) |
+| `runtime/libovr-opendesk/` | LibOVR-compatible layer over the streamer's VR interface |
+| `engine/` | Python reference implementation used by the tests |
 | `third_party/` | Vendored third-party code |
-| `docs/` | Protocol and compatibility notes |
+| `docs/` | Build and compatibility notes |
 
 ## License
 
 OpenDesk is released under the MIT License. See [`LICENSE`](LICENSE) and
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the licenses of
-vendored components and derived work.
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the licenses of vendored and derived components.
 
-OpenDesk does not redistribute any Virtual Desktop artwork or binaries. UI
-artwork ships with the project; the original binaries are never included.
+"Virtual Desktop" is a trademark of its owner and is used here only to say what this project works with.

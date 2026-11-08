@@ -22,9 +22,7 @@
 
 #include "pch.h"
 
-#ifndef _WIN32
 #include <dlfcn.h>
-#endif
 
 #include <runtime.h>
 
@@ -64,49 +62,6 @@ XrResult XRAPI_EXPORT XRAPI_CALL xrNegotiateLoaderRuntimeInterface(const XrNegot
     TraceLocalActivity(local);
     TraceLoggingWriteStart(local, "xrNegotiateLoaderRuntimeInterface");
 
-#ifdef _WIN32
-    // Retrieve the path of the DLL.
-    if (dllHome.empty()) {
-        HMODULE module;
-        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                               (LPCWSTR)&dllHome,
-                               &module)) {
-            wchar_t path[_MAX_PATH];
-            GetModuleFileNameW(module, path, sizeof(path));
-            dllHome = std::filesystem::path(path).parent_path();
-        } else {
-            // Falling back to loading config/writing logs to the current working directory.
-            DebugLog("Failed to locate DLL\n");
-        }
-    }
-
-#ifndef STANDALONE_RUNTIME
-    // This is the location for the runtime logs.
-    {
-        WCHAR* path = nullptr;
-        SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr, &path);
-        programData = std::filesystem::path(path ? path : L"") / L"OpenDesk";
-        CoTaskMemFree(path);
-    }
-#else
-    {
-        WCHAR* path = nullptr;
-        SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path);
-        programData = std::filesystem::path(path ? path : L"") / LOG_FOLDER;
-        CoTaskMemFree(path);
-    }
-#endif
-    CreateDirectoryW(programData.wstring().c_str(), nullptr);
-
-    // Start logging to file.
-    if (!logStream.is_open()) {
-        std::wstring logFile = (programData / ("OpenXR.log")).wstring();
-        logStream.open(logFile, std::ios_base::ate);
-    }
-
-    Log("%s (%ls)\n", RuntimePrettyName.c_str(), dllHome.wstring().c_str());
-
-#else
     // Linux: the shared object's directory, logs in $XDG_STATE_HOME/vd-linux (~/.local/state/vd-linux)
     if (dllHome.empty()) {
         Dl_info info{};
@@ -128,7 +83,6 @@ XrResult XRAPI_EXPORT XRAPI_CALL xrNegotiateLoaderRuntimeInterface(const XrNegot
     }
     Log("%s (%s)\n", RuntimePrettyName.c_str(), dllHome.string().c_str());
 
-#endif
 #ifndef STANDALONE_RUNTIME
     {
         // Trampoline to the standalone/development runtime.

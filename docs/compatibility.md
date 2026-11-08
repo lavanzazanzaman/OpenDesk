@@ -3,10 +3,6 @@
 Everything the headset can change or ask for, and what the Linux streamer does with it.
 Status: ✅ works · 🟡 partial · 🕶 VR stage (OpenDesk XR port) · ⏳ not yet · — not applicable on Linux.
 
-The tables below describe the Linux backend. The Windows backend implements the
-same protocol and settings for desktop streaming; the differences are listed in
-[Windows backend](#windows-backend) at the end.
-
 ## Settings the headset syncs to the streamer
 
 ### SharedUserSettings (headset → streamer)
@@ -73,7 +69,7 @@ same protocol and settings for desktop streaming; the differences are listed in
 | ToggleDictation | — | not used (Windows: voice typing) |
 | ChangeLanguage | ✅ | next KDE keyboard layout |
 
-## Windows Streamer options (OPTIONS / ADVANCED / BINDINGS; no MEDIA tab on Linux)
+## Windows Streamer options (OPTIONS / ADVANCED / BINDINGS; the MEDIA tab is left out on purpose)
 | Option | Status | Linux implementation |
 |---|---|---|
 | Preferred Codec | ✅ | Automatic = HEVC 10-bit (else H.264), H.264, H.264+ (= H.264 on desktop), HEVC, HEVC 10-bit, AV1, AV1 10-bit; fallback chain if the GPU can't |
@@ -84,7 +80,7 @@ same protocol and settings for desktop streaming; the differences are listed in
 | Audio Streaming | ✅ | computer only / VR headset only (virtual sink or mute) / both |
 | Use virtual audio driver | ✅ | "OpenDesk Audio" sink made default while connected |
 | VoiceMeeter mode | — | Windows-only |
-| Allow remote connections | — | not offered: needs upstream's cloud registry and relay (home network only) |
+| Allow remote connections | — | left out on purpose: it would connect to the vendor's online servers (local network and USB only) |
 | Encrypt local traffic | ✅ | AesStream on data/video/audio |
 | Automatically adjust bitrate | ✅ | |
 | Start with Windows → Start with login | ✅ | XDG autostart entry |
@@ -104,23 +100,3 @@ same protocol and settings for desktop streaming; the differences are listed in
 | KWin screen cast (`zkde_screencast_unstable_v1`) | Plasma, after the system check installs `~/.local/share/applications/opendesk-streamer.desktop` (`X-KDE-Wayland-Interfaces`) | no dialog, every output separately, virtual outputs; touchscreens mapped per monitor via KWin `outputName` |
 | xdg-desktop-portal ScreenCast | other Wayland desktops | share dialog once (restore token), several monitors selectable |
 | X11 (MIT-SHM + XRandR) | X11 sessions | monitors from XRandR, cursor drawn in, no virtual monitors |
-
-## Windows backend
-
-The Windows build (`WIN32`) shares the protocol, GUI, settings and input
-encoding with the Linux build and replaces the platform pieces:
-
-| Area | Windows implementation |
-|---|---|
-| Capture | DXGI Desktop Duplication (`win_capture.cpp`), one capture per streamed monitor, cursor composited in |
-| Encoding | FFmpeg hardware backends in order NVENC → AMF → QSV → Media Foundation → libx264/libx265; BGRA converted to NV12/P010 with swscale |
-| Audio | WASAPI loopback for desktop audio (`audio_win.cpp`), headset mic mixed to the selected render device |
-| Input | `SendInput` for keyboard/mouse, Windows touch injection (`InjectTouchInput`) for the headset's laser pointers |
-| Displays | Enumerate and switch physical monitors (`displays_win.cpp`); virtual displays are not created on Windows |
-| Gamepad | ViGEm virtual Xbox 360 / DualShock 4 pad (`gamepad_win.cpp`) |
-| Games tab | Steam libraries plus Oculus (Meta store) manifests from `HKLM\SOFTWARE\WOW6432Node\Oculus VR, LLC\Oculus` and the per-user `Libraries` registry keys |
-| Launch | Oculus apps start through `OculusClient.exe`; Steam through `steam://launch/<id>/vr` |
-| OpenXR runtime | Not built on Windows: desktop streaming only, VR streaming is planned |
-
-Windows-only options (VoiceMeeter, virtual audio driver, KWin/portal capture)
-are not shown or are replaced by their Windows equivalents.

@@ -1,14 +1,10 @@
 #include "desktop_video.h"
 #include "hardware_encoder.h"
 
-#ifdef _WIN32
-#include "win_capture.h"
-#else
 #include "pipewire_capture.h"
 #include "x11_capture.h"
 
 #include <unistd.h>
-#endif
 
 #include <chrono>
 #include <format>
@@ -51,12 +47,8 @@ struct desktop_video_sender::stream_state
 	std::atomic<bool> idr{true};
 	uint64_t frames = 0;
 	std::chrono::steady_clock::time_point encode_start; // this pass
-#ifdef _WIN32
-	std::unique_ptr<win_capture> win; // last: stops before the encoder goes away
-#else
 	std::unique_ptr<pipewire_capture> capture; // last: stops before the encoder goes away
 	std::unique_ptr<x11_capture> x11;
-#endif
 };
 
 desktop_video_sender::desktop_video_sender(stream_channel & video_channel, desktop_video_params p,
@@ -85,18 +77,6 @@ desktop_video_sender::desktop_video_sender(stream_channel & video_channel, deskt
 	for (auto & st: streams)
 	{
 		stream_state * raw = st.get();
-#ifdef _WIN32
-		if (raw->setup.windows)
-		{
-			raw->win = std::make_unique<win_capture>(
-			        raw->setup.name, params.fps,
-			        [this, raw](const captured_frame & f, int w, int h) { on_frame(*raw, f, w, h); }, cb.log);
-			cb.log(std::format("[capture] screen {} = {} (DXGI Desktop Duplication, monitor {}), bounds {},{} {}x{}", raw->index,
-			                   raw->setup.name, raw->setup.monitor_index, raw->setup.bounds.x, raw->setup.bounds.y,
-			                   raw->setup.bounds.width, raw->setup.bounds.height));
-			continue;
-		}
-#else
 		if (raw->setup.x11)
 		{
 			raw->x11 = std::make_unique<x11_capture>(
@@ -114,7 +94,6 @@ desktop_video_sender::desktop_video_sender(stream_channel & video_channel, deskt
 		cb.log(std::format("[capture] screen {} = {} (node {}), bounds {},{} {}x{}", raw->index, raw->setup.name,
 		                   raw->setup.node_id, raw->setup.bounds.x, raw->setup.bounds.y, raw->setup.bounds.width,
 		                   raw->setup.bounds.height));
-#endif
 	}
 }
 
@@ -123,12 +102,8 @@ desktop_video_sender::~desktop_video_sender()
 	alive = false;
 	for (auto & st: streams)
 	{
-#ifdef _WIN32
-		st->win.reset(); // stop every capture thread before encoders and the socket go away
-#else
 		st->capture.reset(); // stop every PipeWire / X11 thread before encoders and the socket go away
 		st->x11.reset();
-#endif
 	}
 	wake();
 	if (encoder_thread.joinable())
@@ -141,13 +116,8 @@ bool desktop_video_sender::running() const
 	if (!alive)
 		return false;
 	for (const auto & st: streams)
-#ifdef _WIN32
-		if (st->win && st->win->failed())
-			return false;
-#else
 		if ((st->capture && st->capture->failed()) || (st->x11 && st->x11->failed()))
 			return false;
-#endif
 	return true;
 }
 
@@ -327,11 +297,7 @@ void desktop_video_sender::on_frame(stream_state & st, const captured_frame & f,
 					                   codec_name(*active_codec), sizes, params.fps, params.kbps,
 					                   params.full_range ? "full" : "limited", params.vbaq ? ", VBAQ" : "",
 					                   params.pre_encode ? ", pre-encode" : "",
-#ifdef _WIN32
-					                   st.encoder->backend(), st.encoder->input_path()));
-#else
 					                   gpu_vendor(st.encoder->config().render_node) == 0x10de ? "NVENC" : "VAAPI", st.encoder->config().render_node));
-#endif
 					format_sent = true;
 					announce = true;
 				}

@@ -4,11 +4,8 @@
 //   RequestGameThumbnails(i16 n, {u8, u64}) -> GameThumbnail(u8 platform, u64 app id, i32 size, PNG/JPG) per game
 //   LaunchGame(u8, u64) / ExitGame(u8, u64); GameExited(u8, u64) when a running game's processes are gone
 //
-// Linux:   Oculus = RiftLift's library (~/.local/share/riftlift/games/*.json, launched with `riftlift launch
-//          <slug>`); Steam = installed apps Steam flags as VR in appinfo.vdf.
-// Windows: Oculus = the Oculus (Meta) library manifests under Oculus' "Software" folders, launched like the
-//          original Windows streamer (OculusClient + the game executable); Steam = the same appinfo.vdf scan,
-//          launched through the Steam client.
+// Oculus = RiftLift's library (~/.local/share/riftlift/games/*.json, launched with `riftlift launch
+// <slug>`); Steam = installed apps Steam flags as VR in appinfo.vdf.
 #pragma once
 
 #include <QByteArray>
@@ -37,9 +34,6 @@ struct game_entry
 	QString name;
 	QString riftlift_slug;         // Linux Oculus: `riftlift launch` argument
 	QString riftlift_key;          // Linux Oculus: RiftLiftLauncher.exe /app <key>
-	QString launch_exe;            // Windows: executable to start directly (Oculus games)
-	QString launch_args;           // Windows: Oculus manifest launchParameters
-	QString install_dir;           // Windows: library folder, used to find the running game
 	std::vector<QString> art;      // wide banner art with the title, best first
 	QString hero, logo;            // fallback: background + title logo
 	game_id id() const { return {platform, app_id}; }
@@ -75,7 +69,7 @@ private:
 		int pid = 0, ppid = 0;
 		QString exe;
 		QStringList args;
-		qulonglong start = 0; // stat starttime / Windows creation time
+		qulonglong start = 0; // stat starttime
 		QByteArray riftlift_launch, steam_app_id; // RIFTLIFT_LAUNCH_ID / SteamAppId from the environment
 	};
 	std::vector<int> roots(const game_entry &, const markers & known) const;
@@ -83,5 +77,4 @@ private:
 };
 
 QString riftlift_executable();        // Linux: empty if RiftLift is not installed
-QString oculus_client_executable();   // Windows: OculusClient.exe, empty if Oculus is not installed
 } // namespace od

@@ -38,10 +38,8 @@ static constexpr uint32_t ovrvd_FrameDataSize = 4992; // VirtualDesktop.Mobile.F
 extern "C" ovrResult ovrvd_SetSynchronizationQueueFamilyVk(ovrSession session, uint32_t queueFamilyIndex);
 extern "C" ovrResult ovrvd_SetSessionPhysicalDeviceVk(ovrSession session, VkInstance instance, VkPhysicalDevice physicalDevice);
 extern "C" ovrResult ovrvd_CommitTextureSwapChainIndex(ovrSession session, ovrTextureSwapChain chain, int index);
-#ifndef _WIN32
 // A new file descriptor (the caller owns it) for the memory of a color swapchain image, and its size: OpenGL imports it
 extern "C" ovrResult ovrvd_ExportTextureSwapChainMemory(ovrSession session, ovrTextureSwapChain chain, int index, int* fd, uint64_t* size);
-#endif
 extern "C" ovrResult ovrvd_GetFrameData(ovrSession session, uint8_t* buffer, uint32_t size);
 // libovr-opendesk: the body tracking skeleton the headset sent (SkeletonJoint array), false if none yet
 extern "C" bool ovrvd_GetBodySkeleton(ovrSession session, uint8_t* joints, uint32_t size, uint32_t* jointCount, int32_t* changedCount);

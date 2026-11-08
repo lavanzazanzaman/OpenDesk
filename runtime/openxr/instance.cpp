@@ -57,39 +57,16 @@ namespace opendesk_openxr {
             xr::ToString(XR_MAKE_VERSION(RuntimeVersionMajor, RuntimeVersionMinor, RuntimeVersionPatch));
         TraceLoggingWrite(g_traceProvider, "OpenDeskXR", TLArg(runtimeVersion.c_str(), "Version"));
 
-#ifdef _WIN32
-        m_useApplicationDeviceForSubmission = getSetting("quirk_use_application_device_for_submission").value_or(false);
-#else
         // Linux: libovr-opendesk composites with the application's own VkQueue, which OpenXR lets a runtime use only during
         // the app's xrEndFrame - never from VDXR's async submission thread while the app's render thread submits too
         // (concurrent use of one VkQueue: random hangs, e.g. Beat Saber on NVIDIA stopped submitting ~5 s in).
         m_useApplicationDeviceForSubmission = true;
-#endif
 
         // Latch the disabled trackers now.
         for (uint32_t i = 0; i < std::size(TrackerRoles); i++) {
             m_isTrackerDisabled[i] = getSetting(TrackerRoles[i].role + "_tracker_disabled").value_or(false);
         }
 
-#ifdef _WIN32
-        // Watch for changes in the registry.
-        try {
-            wil::unique_hkey keyToWatch;
-            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                              xr::utf8_to_wide(RegPrefix).c_str(),
-                              0,
-                              KEY_WOW64_64KEY | KEY_READ,
-                              keyToWatch.put()) == ERROR_SUCCESS) {
-                m_registryWatcher = wil::make_registry_watcher(
-                    std::move(keyToWatch), true, [&](wil::RegistryChangeKind changeType) { refreshSettings(); });
-            }
-        } catch (std::exception&) {
-            // Ignore errors that can happen with UWP applications not able to write to the registry.
-        }
-
-        QueryPerformanceFrequency(&m_qpcFrequency);
-
-#endif
         initializeExtensionsTable();
     }
 
@@ -111,11 +88,7 @@ namespace opendesk_openxr {
         }
 
         if (m_bodyState) {
-#ifdef _WIN32
-            UnmapViewOfFile(m_bodyState);
-#else
             delete m_bodyState; // Linux: filled from the streamer's shared FrameData (see linux_graphics.cpp)
-#endif
         }
 
         if (m_ovrSession) {
@@ -255,58 +228,7 @@ namespace opendesk_openxr {
 
         // FIXME: Put application quirks below.
 
-#ifdef _WIN32
-        HMODULE ovrPlugin;
-        m_isOculusXrPlugin =
-            m_applicationName.find("Oculus VR Plugin") == 0 ||
-            GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, "OVRPlugin.dll", &ovrPlugin);
-        if (m_isOculusXrPlugin) {
-            // For some reason, certain applications built with the Oculus plugin will attempt to initialize LibOVR.
-            // However certain applications like Ghosts of Tabor are "delicate" and do no like our DLL inject, so
-            // instead we perform our own (simpler) style.
-            const bool useOwnInjectionMethod =
-#ifndef STANDALONE_RUNTIME
-                startsWith(m_exeName, "GhostsOfTabor") || startsWith(m_applicationName, "GhostsOfTabor") ||
-                getSetting("quirk_force_own_injection").value_or(false);
-#else
-                true;
-#endif
-            if (!useOwnInjectionMethod) {
-                Log("Using OpenDesk ovr_Detect() injection path\n");
-
-                // We make sure that ovr_Detect() succeeds by injecting the VDXR runtime entry point.
-                std::filesystem::path path(RegGetString(HKEY_LOCAL_MACHINE,
-                                                        "SOFTWARE\\OpenDesk\\Streamer",
-                                                        "Path")
-                                               .value_or(L""));
-                if (!path.empty()) {
-                    path = path /
-#ifdef _WIN64
-                           L"opendesk-injector64.dll";
-#else
-                           L"opendesk-injector32.dll";
-#endif
-
-                    LoadLibraryW(path.c_str());
-                }
-            } else {
-#ifdef _WIN64
-                Log("Using OpenDesk XR ovr_Detect() injection path\n");
-
-                // We create a fake event to make ovr_Detect() succeed.
-                if (!g_fakeHmdConnectedEvent) {
-                    *g_fakeHmdConnectedEvent.put() = CreateEventW(nullptr, true, true, nullptr);
-                }
-#else
-                // There is no OVRPlugin 32-bit as far as I know. So this should never happen.
-                Log("No ovr_Detect() injection available\n");
-#endif
-            }
-        }
-
-#else
         m_isOculusXrPlugin = m_applicationName.find("Oculus VR Plugin") == 0;
-#endif
 
         m_isConformanceTest = m_applicationName == "conformance test";
         m_isOpenComposite = startsWith(m_applicationName, "OpenComposite_");
@@ -563,14 +485,6 @@ namespace opendesk_openxr {
             m_exeName = std::filesystem::read_symlink("/proc/self/exe", ec).filename().string();
         }
 
-#ifdef _WIN32
-        m_extensionsTable.push_back( // Direct3D 11 support.
-            {XR_KHR_D3D11_ENABLE_EXTENSION_NAME, XR_KHR_D3D11_enable_SPEC_VERSION});
-#endif
-#ifdef _WIN32
-        m_extensionsTable.push_back( // Direct3D 12 support.
-            {XR_KHR_D3D12_ENABLE_EXTENSION_NAME, XR_KHR_D3D12_enable_SPEC_VERSION});
-#endif
         m_extensionsTable.push_back( // Vulkan support.
             {XR_KHR_VULKAN_ENABLE_EXTENSION_NAME, XR_KHR_vulkan_enable_SPEC_VERSION});
         m_extensionsTable.push_back( // Vulkan support.
@@ -581,11 +495,6 @@ namespace opendesk_openxr {
         m_extensionsTable.push_back( // Depth buffer submission.
             {XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME, XR_KHR_composition_layer_depth_SPEC_VERSION});
 
-#ifdef _WIN32
-        m_extensionsTable.push_back( // Qpc timestamp conversion.
-            {XR_KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME,
-             XR_KHR_win32_convert_performance_counter_time_SPEC_VERSION});
-#endif
         m_extensionsTable.push_back( // Timespec timestamp conversion.
             {XR_KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME, XR_KHR_convert_timespec_time_SPEC_VERSION});
 
@@ -609,11 +518,6 @@ namespace opendesk_openxr {
 
         m_extensionsTable.push_back( // Unreal Engine 5 needs this.
             {XR_EXT_ACTIVE_ACTION_SET_PRIORITY_EXTENSION_NAME, XR_EXT_active_action_set_priority_SPEC_VERSION});
-
-#ifdef _WIN32
-        m_extensionsTable.push_back( // Audio GUID.
-            {XR_OCULUS_AUDIO_DEVICE_GUID_EXTENSION_NAME, XR_OCULUS_audio_device_guid_SPEC_VERSION});
-#endif
 
         m_extensionsTable.push_back( // Layer alpha (xrizer: OpenVR overlay fades, loading screens).
             {XR_KHR_COMPOSITION_LAYER_COLOR_SCALE_BIAS_EXTENSION_NAME, XR_KHR_composition_layer_color_scale_bias_SPEC_VERSION});
@@ -743,54 +647,6 @@ extern "C" XRAPI_EXPORT const char* getVersionString() {
     return opendesk_openxr::RuntimePrettyName.c_str();
 }
 
-#ifdef _WIN32
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    using namespace opendesk_openxr::utils;
-
-    const auto getExeName = []() {
-        char path[_MAX_PATH];
-        GetModuleFileNameA(nullptr, path, sizeof(path));
-        std::filesystem::path fullPath(path);
-        return fullPath.filename().string();
-    };
-
-    switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH: {
-#ifdef _WIN64
-        // Roblox anti-cheat does not like Detours. We only need Detours for OVRPlugin compatibility, hence it is OK to
-        // skip with Roblox.
-        const bool noDetours = startsWith(getExeName(), "RobloxPlayer");
-        if (!noDetours) {
-            DetourRestoreAfterWith();
-        }
-#endif
-        TraceLoggingRegister(opendesk_openxr::log::g_traceProvider);
-        opendesk_openxr::utils::InitializeHighPrecisionTimer();
-#ifdef _WIN64
-        if (!noDetours) {
-            DetourDllAttach("Kernel32", "OpenEventW", hooked_OpenEventW, original_OpenEventW);
-        }
-#endif
-    } break;
-
-    case DLL_PROCESS_DETACH: {
-#ifdef _WIN64
-        const bool noDetours = startsWith(getExeName(), "RobloxPlayer");
-        if (!noDetours) {
-            DetourDllDetach("Kernel32", "OpenEventW", hooked_OpenEventW, original_OpenEventW);
-        }
-#endif
-        TraceLoggingUnregister(opendesk_openxr::log::g_traceProvider);
-    } break;
-
-    case DLL_THREAD_ATTACH:
-    case DLL_THREAD_DETACH:
-        break;
-    }
-    return TRUE;
-}
-#else
 __attribute__((constructor)) static void openxr_attach() {
     opendesk_openxr::utils::InitializeHighPrecisionTimer();
 }
-#endif

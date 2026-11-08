@@ -88,116 +88,6 @@ QString steam_root()
 	return platform::steam_root();
 }
 
-#ifdef _WIN32
-// ---------------------------------------------------------------------------------------------------------------
-// Oculus (Meta) store: OculusBase\Manifests\*.json plus every user's Oculus library folders, exactly the places
-// the original Windows streamer scans. The game is started from its own executable (OculusClient is started first
-// when it is not running), and a game counts as running while a process runs from its software folder.
-
-QSettings oculus_registry(const QString & path)
-{
-	return QSettings(path, QSettings::NativeFormat);
-}
-
-QString oculus_base();
-
-QString oculus_client_executable()
-{
-	return QDir::cleanPath(oculus_base() + "/Support/oculus-client/OculusClient.exe");
-}
-
-QString oculus_base()
-{
-	QString base = oculus_registry("HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Oculus VR, LLC\\Oculus").value("Base").toString();
-	if (base.isEmpty())
-		base = "C:\\Program Files\\Oculus";
-	return QDir::toNativeSeparators(base);
-}
-
-QStringList oculus_manifest_files()
-{
-	QStringList out;
-	auto add = [&](const QString & dir) {
-		for (const QFileInfo & f: QDir(dir).entryInfoList({"*.json"}, QDir::Files))
-			out << f.absoluteFilePath();
-	};
-	const QString base = oculus_base();
-	add(base + "/Manifests");
-	// Per-user libraries, like the original: every loaded user hive under HKEY_USERS (which includes HKCU).
-	auto add_libraries = [&](QSettings & libs) {
-		for (const QString & group: libs.childGroups())
-		{
-			libs.beginGroup(group);
-			QString path = libs.value("OriginalPath").toString();
-			if (path.isEmpty())
-				path = libs.value("Path").toString();
-			libs.endGroup();
-			if (!path.isEmpty())
-				add(QDir::toNativeSeparators(path) + "/Manifests");
-		}
-	};
-	QSettings users("HKEY_USERS", QSettings::NativeFormat);
-	for (const QString & sid: users.childGroups())
-	{
-		if (sid.endsWith("_Classes"))
-			continue;
-		QSettings libs("HKEY_USERS\\" + sid + "\\Software\\Oculus VR, LLC\\Oculus\\Libraries", QSettings::NativeFormat);
-		add_libraries(libs);
-	}
-	QSettings user("HKEY_CURRENT_USER\\Software\\Oculus VR, LLC\\Oculus\\Libraries", QSettings::NativeFormat);
-	add_libraries(user);
-	return out;
-}
-
-void scan_oculus(std::vector<game_entry> & out)
-{
-	QStringList seen;
-	for (QString manifest: oculus_manifest_files())
-	{
-		if (QFileInfo::exists(manifest + ".mini"))
-			manifest += ".mini"; // a store update's partial manifest takes precedence
-		QFile f(manifest);
-		if (!f.open(QIODevice::ReadOnly))
-			continue;
-		QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-		QString launch_file = o.value("launchFile").toString();
-		QString canonical = o.value("canonicalName").toString();
-		if (launch_file.isEmpty() || canonical.isEmpty() || seen.contains(canonical))
-			continue;
-		// appId is a decimal string in modern manifests; older ones may omit it
-		bool numeric = false;
-		uint64_t app_id = o.value("appId").toString().toULongLong(&numeric);
-		if (!numeric || !app_id)
-			app_id = fnv1a(canonical.toUtf8()) & 0x7fffffffffffffffull;
-		seen << canonical;
-		game_entry g;
-		g.platform = game_platform::oculus_rift;
-		g.app_id = app_id;
-		g.name = canonical;
-		g.launch_args = o.value("launchParameters").toString();
-		const QString library = QFileInfo(manifest).absolutePath() + "/..";
-		const QString software = QDir::cleanPath(library + "/Software/" + canonical);
-		QString exe = QDir::cleanPath(software + "/" + QFileInfo(launch_file).fileName());
-		if (!QFileInfo::exists(exe))
-		{
-			// some manifests carry a relative launchFile with subfolders
-			QString joined = QDir::cleanPath(software + "/" + launch_file);
-			if (QFileInfo::exists(joined))
-				exe = joined;
-		}
-		g.launch_exe = exe;
-		g.install_dir = software;
-		QString shared = QDir::cleanPath(oculus_base() + "/CoreData/Software/StoreAssets/" + canonical + "_assets/cover_landscape_image.jpg");
-		if (QFileInfo::exists(shared))
-			g.art.push_back(shared);
-		QString art = QDir::cleanPath(library + "/Software/StoreAssets/" + canonical + "_assets/cover_landscape_image.jpg");
-		if (art != shared && QFileInfo::exists(art))
-			g.art.push_back(art);
-		out.push_back(std::move(g));
-	}
-}
-#endif
-
 QString read_text(const QString & path)
 {
 	QFile f(path);
@@ -463,7 +353,6 @@ void scan_steam(std::vector<game_entry> & out, const std::set<uint64_t> & taken)
 		g.platform = game_platform::steam;
 		g.app_id = id;
 		g.name = installed[id].name;
-		g.install_dir = installed[id].dir;
 		// librarycache/<id>/[<hash>/]header.jpg etc. (newer clients put each asset in a hash folder)
 		QString cache = root + "/appcache/librarycache/" + QString::number(id);
 		std::map<QString, QString> found;
@@ -571,11 +460,7 @@ std::vector<game_entry> scan_games()
 {
 	std::vector<game_entry> games;
 	std::set<uint64_t> taken;
-#ifdef _WIN32
-	scan_oculus(games);
-#else
 	scan_riftlift(games, taken);
-#endif
 	scan_steam(games, taken);
 	return games;
 }
@@ -604,94 +489,6 @@ QByteArray game_thumbnail(const game_entry & g)
 	return png;
 }
 
-#ifdef _WIN32
-process_table::process_table()
-{
-	for (const auto & e: platform::processes())
-	{
-		process p;
-		p.pid = e.pid;
-		p.ppid = e.ppid;
-		p.start = e.start;
-		p.exe = e.exe;
-		p.args = e.args;
-		procs.push_back(std::move(p));
-	}
-}
-
-std::vector<int> process_table::roots(const game_entry & g, const markers &) const
-{
-	// A game runs while a process's executable lives in its install folder. Steam and Oculus games both keep
-	// their binaries under that folder, so this covers the game and every helper it starts.
-	QString folder = QDir::fromNativeSeparators(g.install_dir);
-	const QString wanted = folder.toLower();
-	std::vector<int> out;
-	if (wanted.isEmpty())
-		return out;
-	for (const auto & p: procs)
-	{
-		const QString exe = QDir::fromNativeSeparators(p.exe).toLower();
-		if (exe.startsWith(wanted + "/") || exe == wanted)
-			out.push_back(p.pid);
-	}
-	return out;
-}
-
-std::vector<int> process_table::launchers(const game_entry &) const
-{
-	return {};
-}
-
-process_table::markers process_table::launch_markers(const game_entry &) const
-{
-	return {};
-}
-
-process_table::snapshot process_table::take(const game_entry & g, const markers & known) const
-{
-	snapshot out;
-	for (int pid: pids(g, known))
-		for (const auto & p: procs)
-			if (p.pid == pid)
-				out.emplace_back(pid, p.start);
-	return out;
-}
-
-std::vector<int> process_table::remaining(const snapshot & then, const markers &) const
-{
-	std::vector<int> out;
-	for (const auto & p: procs)
-		if (std::find(then.begin(), then.end(), std::pair<int, qulonglong>(p.pid, p.start)) != then.end())
-			out.push_back(p.pid);
-	return out;
-}
-
-bool process_table::running(const game_entry & g, const markers & known) const
-{
-	return !roots(g, known).empty();
-}
-
-std::vector<int> process_table::pids(const game_entry & g, const markers & known) const
-{
-	std::vector<int> out = roots(g, known);
-	std::set<int> seen(out.begin(), out.end());
-	for (size_t i = 0; i < out.size(); ++i)
-		for (const auto & p: procs)
-			if (p.ppid == out[i] && seen.insert(p.pid).second)
-				out.push_back(p.pid);
-	return out;
-}
-
-QString riftlift_executable()
-{
-	return {}; // RiftLift is Linux-only; Windows uses the Oculus store
-}
-
-QString oculus_client_executable()
-{
-	return {};
-}
-#else
 process_table::process_table()
 {
 	for (const QFileInfo & e: QDir("/proc").entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
@@ -849,5 +646,4 @@ QString riftlift_executable()
 		exe = QStandardPaths::findExecutable("riftlift", {QDir::homePath() + "/.local/bin"});
 	return exe;
 }
-#endif
 } // namespace od

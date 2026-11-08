@@ -64,16 +64,3 @@ The Unified Expressions and VRCFaceTracking v2 avatar parameter definitions
 used by `core/engine/face_tracking.cpp` are based on
 [VRCFaceTracking](https://github.com/benaclejames/VRCFaceTracking) by
 benaclejames and contributors, Apache-2.0.
-
-## AMD FidelityFX CAS and FSR 1
-
-`third_party/FidelityFX` holds `ffx_a.h`, `ffx_cas.h` and `ffx_fsr1.h` from
-[FidelityFX-CAS](https://github.com/GPUOpen-Effects/FidelityFX-CAS) and
-[FidelityFX-FSR](https://github.com/GPUOpen-Effects/FidelityFX-FSR), used by the Windows runtime's sharpening and
-upscaling shaders. Copyright (c) 2020-2021 Advanced Micro Devices, Inc., MIT license (see the `LICENSE-*.txt` files
-there).
-
-## Windows Implementation Libraries (WIL)
-
-The Windows runtime is compiled with [WIL](https://github.com/microsoft/wil) headers (fetched at build time, not part
-of this repository). Copyright (c) Microsoft Corporation, MIT license.

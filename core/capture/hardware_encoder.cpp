@@ -1,4 +1,3 @@
-#ifndef _WIN32 // Linux/VAAPI implementation; hardware_encoder_win.cpp is the Windows one
 #include "hardware_encoder.h"
 #include "dmabuf_readback.h"
 #include "vk_buffers.h"
@@ -207,7 +206,6 @@ struct hardware_encoder::cuda_state
 	}
 };
 
-
 unsigned gpu_vendor(const std::string & node)
 {
 	unsigned vendor = 0;
@@ -356,6 +354,11 @@ std::string vr_render_node()
 		if (const std::string node = node_of_pci(pci); !node.empty())
 			return node;
 	}
+	return auto_vr_render_node();
+}
+
+std::string auto_vr_render_node()
+{
 	static const std::string chosen = [] {
 		const std::string display = default_render_node();
 		struct stat st{};
@@ -904,4 +907,3 @@ void hardware_encoder::encode_nv12(AVFrame * frame, bool force_idr, const au_cal
 }
 } // namespace od
 
-#endif

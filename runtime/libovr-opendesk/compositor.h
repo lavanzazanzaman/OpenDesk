@@ -8,11 +8,6 @@
 // memory is exported as an opaque fd and imported into the private device (same driver, identical image parameters).
 // Per frame the images are released from the app's queue, composited, and handed back (queue family ownership via
 // VK_QUEUE_FAMILY_EXTERNAL).
-//
-// Windows: the same with OPAQUE_WIN32 NT handles, plus a Direct3D 11 mode for OpenDesk XR's D3D11 core (which also
-// carries D3D12, OpenGL and Vulkan apps): swapchain textures are shared D3D11 textures (NT handles) imported into the
-// private device, and a shared ID3D11Fence (a timeline semaphore on our side) orders the app's rendering, the
-// compositing and the app's next frame on the GPU.
 #pragma once
 
 #include "vr_client.h"
@@ -21,16 +16,6 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
-#ifdef _WIN32
-#include <windows.h>
-#define VK_USE_PLATFORM_WIN32_KHR
-struct ID3D11Device;
-struct ID3D11Device5;
-struct ID3D11DeviceContext4;
-struct ID3D11Fence;
-struct ID3D11Texture2D;
-struct IDXGIVkInteropDevice1;
-#endif
 #include <vulkan/vulkan.h>
 
 namespace od::ovr
@@ -56,13 +41,6 @@ struct swapchain
 	std::vector<std::vector<VkImageView>> views; // [image][array layer] of `shared`
 	int current = 0;   // next index the app renders into
 	int committed = -1; // last committed index (what the compositor samples)
-#ifdef _WIN32
-	std::vector<ID3D11Texture2D *> textures; // D3D11 mode: what the app renders into (`shared` imports them)
-	uint32_t dxgi_format = 0;
-	uint32_t dxgi_view_format = 0; // typed (dxgi_format may be typeless): what views of it use
-	uint32_t mip_levels = 1;
-	bool dxvk = false; // `shared` are DXVK's own images (not ours to destroy), in whatever layout DXVK keeps them
-#endif
 };
 
 struct composite_layer
@@ -97,25 +75,12 @@ class compositor
 public:
 	// the application's GPU objects (its session binding)
 	compositor(VkPhysicalDevice, VkDevice, VkQueue, uint32_t queue_family);
-#ifdef _WIN32
-	// Direct3D 11 mode: the app's (OpenDesk XR's submission) device
-	// DXVK's D3D11 (IDXGIVkInteropDevice1): composites on DXVK's own VkDevice and queue instead (no shared resources)
-	explicit compositor(ID3D11Device *);
-	bool d3d11() const { return d3d_device != nullptr; }
-	bool dxvk_mode() const { return dxvk != nullptr; }
-	// textures of `dxgi_format` (typeless allowed: `format` is what we sample them as); `shared_ok` false for depth
-	std::unique_ptr<swapchain> create_swapchain_d3d11(uint32_t dxgi_format, VkFormat format, uint32_t width, uint32_t height,
-	                                                  uint32_t array_size, uint32_t mip_levels, uint32_t sample_count,
-	                                                  uint32_t image_count, bool depth, bool cube, bool render_target, bool uav, bool shader_resource);
-#endif
 	~compositor();
 
 	std::unique_ptr<swapchain> create_swapchain(VkFormat, uint32_t width, uint32_t height, uint32_t array_size,
 	                                            uint32_t mip_levels, uint32_t sample_count, uint32_t image_count, bool depth, bool cube = false);
 	void destroy_swapchain(swapchain &);
-#ifndef _WIN32
 	int export_memory(const swapchain & sc, size_t index); // a new fd for the image's memory (color images only)
-#endif
 
 	// composites into the client's slot images; blocks until the GPU finished. eye_pose: the frame's render poses
 	// (tracking space) - quads are placed relative to them. stream_fov: left, right, up, down per eye.
@@ -188,20 +153,7 @@ private:
 	VkCommandPool app_pool = VK_NULL_HANDLE;
 	VkCommandBuffer app_cmd = VK_NULL_HANDLE;
 	VkFence app_fence = VK_NULL_HANDLE;
-#ifdef _WIN32
-	PFN_vkGetMemoryWin32HandleKHR get_memory_fd = nullptr; // (the name of the Linux one: same role)
-	// Direct3D 11 mode
-	ID3D11Device5 * d3d_device = nullptr;
-	ID3D11DeviceContext4 * d3d_context = nullptr;
-	ID3D11Fence * d3d_fence = nullptr;      // shared with `timeline`
-	VkSemaphore timeline = VK_NULL_HANDLE; // the D3D11 fence on our device
-	uint64_t fence_value = 0;
-	uint64_t luid = 0; // the D3D11 adapter
-	void create_d3d11_sync();
-	IDXGIVkInteropDevice1 * dxvk = nullptr; // DXVK mode: device/queue/physical/instance are DXVK's (borrowed)
-#else
 	PFN_vkGetMemoryFdKHR get_memory_fd = nullptr;
-#endif
 	bool app_vulkan() const { return app_device != VK_NULL_HANDLE; }
 
 	// the compositor's private device on the same GPU

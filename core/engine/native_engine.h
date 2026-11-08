@@ -5,11 +5,7 @@
 // Next: input injection + audio (stage 2), in-process desktop capture/encode (stage 3), VR (stage 4).
 #pragma once
 
-#ifdef _WIN32
-#include "displays_win.h"
-#else
 #include "displays.h"
-#endif
 #include "games.h"
 #include "protocol.h"
 #include "vr_ipc.h"
@@ -31,7 +27,6 @@ class QTcpServer;
 class QTimer;
 class QTcpSocket;
 class QUdpSocket;
-
 
 namespace od
 {
@@ -55,8 +50,6 @@ struct engine_options
 	bool auto_select_mic = true;               // make "OpenDesk Microphone" the default input while in use
 	bool encrypt_local = false;                // EncryptLocalTraffic: AesStream on data/video/audio too
 	bool lock_on_disconnect = false;
-	bool dxvk_default = false;                 // Windows: DXVK for VR games without their own setting
-	QMap<QString, bool> dxvk_games;            // Windows: per game ("steam:<appid>" / "oculus:<id>") DXVK on/off
 	bool boost_priority = false;               // ADVANCED Boost game priority: the VR app's render thread at nice -10 (rtkit)
 	QString screenshots_dir;
 	QString videos_root;                       // MEDIA: videos folder (Videos tab library root)
@@ -87,10 +80,8 @@ public slots:
 	void set_options(QJsonObject options);
 	void headset_action(QString action); // BINDINGS: SwitchMonitor, ToggleVRMode, passthrough toggles, ...
 
-#ifndef _WIN32
 private slots:
 	void on_keyboard_layout_changed(uint index); // KDE org.kde.KeyboardLayouts.layoutChanged
-#endif
 
 signals:
 	void event(QJsonObject);
@@ -125,7 +116,6 @@ private:
 	bool vr_available() const; // VR enabled and an OpenXR app has a session (HasVR)
 	void fetch_xrizer();
 	void apply_game_priority(); // "Boost game priority" for the VR app's render thread
-	void sync_dxvk();           // Windows: DXVK placed in / removed from the games' folders per the settings
 	int render_pid = 0, render_tid = 0, boosted_tid = 0, boosted_from_nice = 0;
 	void sync_vr_state();      // HasVR / StreamingSource to the headset after an app started or quit
 	void update_vr_server(); // creates/destroys the OpenXR runtime socket with the VR option; pushes display state

@@ -7,7 +7,6 @@
 
 namespace od
 {
-#ifndef _WIN32
 namespace
 {
 QString sysfs(const QString & iface, const QString & name)
@@ -22,7 +21,6 @@ bool is_usb_link(const QString & iface)
 	return driver == "cdc_ncm" || driver == "cdc_ether" || driver == "rndis_host";
 }
 } // namespace
-#endif
 
 std::vector<network_adapter> local_adapters()
 {
@@ -38,15 +36,9 @@ std::vector<network_adapter> local_adapters()
 
 		network_adapter base;
 		base.mac = ni.hardwareAddress().remove(':').toUpper().toStdString();
-#ifdef _WIN32
-		base.is_wireless = ni.type() == QNetworkInterface::Wifi;
-		base.is_gigabit = false; // not exposed by Qt; only used to order adapters in the headset
-		base.is_usb = false;
-#else
 		base.is_wireless = QFileInfo::exists("/sys/class/net/" + name + "/wireless");
 		base.is_gigabit = sysfs(name, "speed").toInt() >= 1000;
 		base.is_usb = is_usb_link(name);
-#endif
 
 		for (const QNetworkAddressEntry & e: ni.addressEntries())
 		{

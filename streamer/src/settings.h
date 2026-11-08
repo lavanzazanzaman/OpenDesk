@@ -76,14 +76,19 @@ public:
 	bool enableAQ = true;
 	bool enable2Pass = false;
 	bool adaptiveEncoderSpeed = true; // VR: faster NVENC presets while encoding can't keep up with the refresh rate
+	int nvencPreset = 1;              // NVENC preset: 1 speed (P1), 4 balanced (P4), 6 quality (P6)
 	int amdEncoderSpeed = 0;          // AMD (VAAPI) quality preset: 0 speed, 1 balanced, 2 quality
 	bool dualGpu = false;             // one card runs the games, another encodes the stream
 	QString gameGpu, streamingGpu;    // PCI addresses (render nodes can change between boots)
+	QString singleGpu;                // not dualGpu: the card for VR games; empty = automatic (the main screen's)
+	QString effectiveGameGpu() const { return dualGpu ? gameGpu : singleGpu; }
+	QString effectiveStreamingGpu() const { return dualGpu ? streamingGpu : singleGpu; }
 	GamepadEmulation gamepadEmulation = GamepadEmulation::Automatic;
 	AudioStreaming audioStreaming = AudioStreaming::HeadsetOnly;
 	bool useVirtualAudioDriver = true;
 	bool encryptLocalTraffic = false;
 	bool autoAdjustBitrate = true;
+	bool autoUpdate = true; // AppImage: download new GitHub releases in the background
 	bool startWithLogin = false; // Windows defaults to true; off here so we never add autostart silently
 	bool startMinimizedInTray = false;
 	bool useTouchInput = true;
@@ -103,8 +108,6 @@ public:
 	bool useFovStencil = true;
 	bool softFoveaEdge = false; // foveated streaming: fade the fovea into the periphery (off: the Windows streamer's edge)
 	bool boostGamePriority = false;
-	bool dxvkByDefault = false;     // Windows: run Direct3D 11 VR games on DXVK unless set per game
-	QMap<QString, bool> dxvkGames;  // Windows: per game ("steam:<appid>" / "oculus:<id>")
 	double mouthSensitivity = 2.0; // face tracking -> VRChat: mouth / jaw response (1 = raw headset weights)
 	QString reportedStreamerVersion = "1.20.3"; // compatibility: lowest Windows version the headset accepts
 	bool reportedVersionAuto = true; // headset apps 1.34.25+ send their version: report it back (older: the version above)

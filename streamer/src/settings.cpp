@@ -98,10 +98,12 @@ void StreamerSettings::resetStreaming()
 	enableAQ = true;
 	enable2Pass = false;
 	adaptiveEncoderSpeed = true;
+	nvencPreset = 1;
 	amdEncoderSpeed = 0;
 	dualGpu = false;
 	gameGpu.clear();
 	streamingGpu.clear();
+	singleGpu.clear();
 	encryptLocalTraffic = false;
 	autoAdjustBitrate = true;
 	reportedStreamerVersion = "1.20.3";
@@ -121,8 +123,6 @@ void StreamerSettings::resetVR()
 	useFovStencil = true;
 	softFoveaEdge = false;
 	boostGamePriority = false;
-	dxvkByDefault = false;
-	dxvkGames.clear();
 	mouthSensitivity = 2.0;
 	save();
 }
@@ -139,6 +139,7 @@ void StreamerSettings::resetAudioInput()
 
 void StreamerSettings::resetGeneral()
 {
+	autoUpdate = true;
 	startWithLogin = false;
 	startMinimizedInTray = false;
 	lockComputer = false;
@@ -176,16 +177,23 @@ void StreamerSettings::load()
 	b("EnableAQ", enableAQ);
 	b("Enable2Pass", enable2Pass);
 	b("AdaptiveEncoderSpeed", adaptiveEncoderSpeed);
+	if (o.contains("NvencPreset"))
+	{
+		const int v = o["NvencPreset"].toInt(1); // (older versions offered more steps)
+		nvencPreset = v <= 2 ? 1 : v <= 5 ? 4 : 6;
+	}
 	if (o.contains("AmdEncoderSpeed"))
 		amdEncoderSpeed = o["AmdEncoderSpeed"].toInt();
 	b("DualGpu", dualGpu);
 	s("GameGpu", gameGpu);
 	s("StreamingGpu", streamingGpu);
+	s("SingleGpu", singleGpu);
 	e("GamepadEmulation", gamepadEmulation);
 	e("AudioStreaming", audioStreaming);
 	b("UseVirtualAudioDriver", useVirtualAudioDriver);
 	b("EncryptLocalTraffic", encryptLocalTraffic);
 	b("AutoAdjustBitrate", autoAdjustBitrate);
+	b("AutoUpdate", autoUpdate);
 	b("StartWithLogin", startWithLogin);
 	b("StartMinimizedInTray", startMinimizedInTray);
 	b("UseTouchInput", useTouchInput);
@@ -204,14 +212,6 @@ void StreamerSettings::load()
 	b("UseFovStencil", useFovStencil);
 	b("SoftFoveaEdge", softFoveaEdge);
 	b("BoostGamePriority", boostGamePriority);
-	b("DxvkByDefault", dxvkByDefault);
-	if (o.contains("DxvkGames"))
-	{
-		dxvkGames.clear();
-		const QJsonObject g = o["DxvkGames"].toObject();
-		for (auto it = g.begin(); it != g.end(); ++it)
-			dxvkGames[it.key()] = it.value().toBool();
-	}
 	d("MouthSensitivity", mouthSensitivity);
 	s("ReportedStreamerVersion", reportedStreamerVersion);
 	b("ReportedVersionAuto", reportedVersionAuto);
@@ -243,10 +243,13 @@ void StreamerSettings::save()
 	o["EnableAQ"] = enableAQ;
 	o["Enable2Pass"] = enable2Pass;
 	o["AdaptiveEncoderSpeed"] = adaptiveEncoderSpeed;
+	o["NvencPreset"] = nvencPreset;
 	o["AmdEncoderSpeed"] = amdEncoderSpeed;
+	o["AutoUpdate"] = autoUpdate;
 	o["DualGpu"] = dualGpu;
 	o["GameGpu"] = gameGpu;
 	o["StreamingGpu"] = streamingGpu;
+	o["SingleGpu"] = singleGpu;
 	o["GamepadEmulation"] = int(gamepadEmulation);
 	o["AudioStreaming"] = int(audioStreaming);
 	o["UseVirtualAudioDriver"] = useVirtualAudioDriver;
@@ -269,13 +272,6 @@ void StreamerSettings::save()
 	o["UseFovStencil"] = useFovStencil;
 	o["SoftFoveaEdge"] = softFoveaEdge;
 	o["BoostGamePriority"] = boostGamePriority;
-	o["DxvkByDefault"] = dxvkByDefault;
-	{
-		QJsonObject g;
-		for (auto it = dxvkGames.begin(); it != dxvkGames.end(); ++it)
-			g[it.key()] = it.value();
-		o["DxvkGames"] = g;
-	}
 	o["MouthSensitivity"] = mouthSensitivity;
 	o["ReportedStreamerVersion"] = reportedStreamerVersion;
 	o["ReportedVersionAuto"] = reportedVersionAuto;

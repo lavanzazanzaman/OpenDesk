@@ -161,77 +161,6 @@ namespace xr {
 
 namespace opendesk_openxr::utils {
 
-#ifdef _WIN32
-    namespace {
-
-        extern "C" NTSYSAPI NTSTATUS NTAPI NtSetTimerResolution(ULONG DesiredResolution,
-                                                                BOOLEAN SetResolution,
-                                                                PULONG CurrentResolution);
-        extern "C" NTSYSAPI NTSTATUS NTAPI NtQueryTimerResolution(PULONG MinimumResolution,
-                                                                  PULONG MaximumResolution,
-                                                                  PULONG CurrentResolution);
-    } // namespace
-
-    static void InitializeHighPrecisionTimer() {
-        // https://stackoverflow.com/questions/3141556/how-to-setup-timer-resolution-to-0-5-ms
-        ULONG min, max, current;
-        NtQueryTimerResolution(&min, &max, &current);
-
-        ULONG currentRes;
-        NtSetTimerResolution(max, TRUE, &currentRes);
-
-        // https://docs.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setprocessinformation
-        // Enable HighQoS to achieve maximum performance, and turn off power saving.
-        {
-            PROCESS_POWER_THROTTLING_STATE PowerThrottling{};
-            PowerThrottling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-            PowerThrottling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
-            PowerThrottling.StateMask = 0;
-
-            SetProcessInformation(
-                GetCurrentProcess(), ProcessPowerThrottling, &PowerThrottling, sizeof(PowerThrottling));
-        }
-
-        // https://forums.oculusvr.com/t5/General/SteamVR-has-fixed-the-problems-with-Windows-11/td-p/956413
-        // Always honor Timer Resolution Requests. This is to ensure that the timer resolution set-up above sticks
-        // through transitions of the main window (eg: minimization).
-        {
-            // This setting was introduced in Windows 11 and the definition is not available in older headers.
-#ifndef PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
-            const auto PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION = 0x4U;
-#endif
-
-            PROCESS_POWER_THROTTLING_STATE PowerThrottling{};
-            PowerThrottling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
-            PowerThrottling.ControlMask = PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
-            PowerThrottling.StateMask = 0;
-
-            SetProcessInformation(
-                GetCurrentProcess(), ProcessPowerThrottling, &PowerThrottling, sizeof(PowerThrottling));
-        }
-    }
-
-    // https://stackoverflow.com/questions/865152/how-can-i-get-a-process-handle-by-its-name-in-c
-    static bool IsServiceRunning(const std::wstring_view& name) {
-        PROCESSENTRY32 entry;
-        entry.dwSize = sizeof(PROCESSENTRY32);
-
-        bool found = false;
-        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (Process32First(snapshot, &entry) == TRUE) {
-            while (Process32Next(snapshot, &entry) == TRUE) {
-                if (std::wstring_view(entry.szExeFile) == name) {
-                    found = true;
-                    break;
-                }
-            }
-        }
-        CloseHandle(snapshot);
-
-        return found;
-    }
-
-#else
     static void InitializeHighPrecisionTimer() {
         // Linux: nanosleep/clock_nanosleep are already high resolution
     }
@@ -240,7 +169,6 @@ namespace opendesk_openxr::utils {
         return true; // the streamer's socket is checked by libovr-opendesk (ovr_Detect)
     }
 
-#endif
     // A generic timer.
     struct ITimer {
         virtual ~ITimer() = default;
@@ -300,19 +228,11 @@ namespace opendesk_openxr::utils {
         PFN_vkCmdResetQueryPool vkCmdResetQueryPool{nullptr};
         PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp{nullptr};
         PFN_vkEndCommandBuffer vkEndCommandBuffer{nullptr};
-#ifdef _WIN32
-        PFN_vkGetMemoryWin32HandlePropertiesKHR vkGetMemoryWin32HandlePropertiesKHR{nullptr};
-#else
         PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR{nullptr};
-#endif
         PFN_vkBindImageMemory vkBindImageMemory{nullptr};
         PFN_vkCreateSemaphore vkCreateSemaphore{nullptr};
         PFN_vkDestroySemaphore vkDestroySemaphore{nullptr};
-#ifdef _WIN32
-        PFN_vkImportSemaphoreWin32HandleKHR vkImportSemaphoreWin32HandleKHR{nullptr};
-#else
         PFN_vkImportSemaphoreFdKHR vkImportSemaphoreFdKHR{nullptr};
-#endif
         PFN_vkCreateFence vkCreateFence{nullptr};
         PFN_vkDestroyFence vkDestroyFence{nullptr};
         PFN_vkResetFences vkResetFences{nullptr};
@@ -324,125 +244,6 @@ namespace opendesk_openxr::utils {
     };
 
     // API dispatch table for OpenGL.
-#ifdef _WIN32
-    struct GlDispatch {
-        PFNGLGETUNSIGNEDBYTEVEXTPROC glGetUnsignedBytevEXT{nullptr};
-        PFNGLCREATETEXTURESPROC glCreateTextures{nullptr};
-        PFNGLCREATEMEMORYOBJECTSEXTPROC glCreateMemoryObjectsEXT{nullptr};
-        PFNGLDELETEMEMORYOBJECTSEXTPROC glDeleteMemoryObjectsEXT{nullptr};
-        PFNGLTEXTURESTORAGEMEM2DEXTPROC glTextureStorageMem2DEXT{nullptr};
-        PFNGLTEXTURESTORAGEMEM2DMULTISAMPLEEXTPROC glTextureStorageMem2DMultisampleEXT{nullptr};
-        PFNGLTEXTURESTORAGEMEM3DEXTPROC glTextureStorageMem3DEXT{nullptr};
-        PFNGLTEXTURESTORAGEMEM3DMULTISAMPLEEXTPROC glTextureStorageMem3DMultisampleEXT{nullptr};
-        PFNGLGENSEMAPHORESEXTPROC glGenSemaphoresEXT{nullptr};
-        PFNGLDELETESEMAPHORESEXTPROC glDeleteSemaphoresEXT{nullptr};
-        PFNGLSEMAPHOREPARAMETERUI64VEXTPROC glSemaphoreParameterui64vEXT{nullptr};
-        PFNGLSIGNALSEMAPHOREEXTPROC glSignalSemaphoreEXT{nullptr};
-        PFNGLIMPORTMEMORYWIN32HANDLEEXTPROC glImportMemoryWin32HandleEXT{nullptr};
-        PFNGLIMPORTSEMAPHOREWIN32HANDLEEXTPROC glImportSemaphoreWin32HandleEXT{nullptr};
-        PFNGLGENQUERIESPROC glGenQueries{nullptr};
-        PFNGLDELETEQUERIESPROC glDeleteQueries{nullptr};
-        PFNGLQUERYCOUNTERPROC glQueryCounter{nullptr};
-        PFNGLGETQUERYOBJECTIVPROC glGetQueryObjectiv{nullptr};
-        PFNGLGETQUERYOBJECTUI64VPROC glGetQueryObjectui64v{nullptr};
-
-#ifdef _DEBUG
-        PFNGLDEBUGMESSAGECALLBACKPROC glDebugMessageCallback{nullptr};
-#endif
-    };
-
-    struct GlContext {
-        HDC glDC;
-        HGLRC glRC;
-
-        bool valid{false};
-    };
-
-    class GlContextSwitch {
-      public:
-        GlContextSwitch(const GlContext& context, bool ignoreErrors = false)
-            : m_valid(context.valid), m_ignoreErrors(ignoreErrors) {
-            if (m_valid) {
-                m_glDC = wglGetCurrentDC();
-                m_glRC = wglGetCurrentContext();
-
-                wglMakeCurrent(context.glDC, context.glRC);
-
-                if (!m_ignoreErrors) {
-                    // Reset error codes.
-                    while (glGetError() != GL_NO_ERROR)
-                        ;
-                }
-            }
-        }
-
-        ~GlContextSwitch() noexcept(false) {
-            if (m_valid) {
-                const auto error = glGetError();
-
-                wglMakeCurrent(m_glDC, m_glRC);
-
-                if (!m_ignoreErrors) {
-                    CHECK_MSG(error == GL_NO_ERROR, fmt::format("OpenGL error: 0x{:x}", error));
-                }
-            }
-        }
-
-      private:
-        const bool m_valid;
-        const bool m_ignoreErrors;
-        HDC m_glDC;
-        HGLRC m_glRC;
-    };
-
-#endif
-#ifdef _WIN32
-    // https://docs.microsoft.com/en-us/archive/msdn-magazine/2017/may/c-use-modern-c-to-access-the-windows-registry
-    static std::optional<int> RegGetDword(HKEY hKey, const std::string& subKey, const std::string& value) {
-        DWORD data{};
-        DWORD dataSize = sizeof(data);
-        LONG retCode = ::RegGetValue(hKey,
-                                     xr::utf8_to_wide(subKey).c_str(),
-                                     xr::utf8_to_wide(value).c_str(),
-                                     RRF_SUBKEY_WOW6464KEY | RRF_RT_REG_DWORD,
-                                     nullptr,
-                                     &data,
-                                     &dataSize);
-        if (retCode != ERROR_SUCCESS) {
-            return {};
-        }
-        return data;
-    }
-
-    static std::optional<std::wstring> RegGetString(HKEY hKey, const std::string& subKey, const std::string& value) {
-        DWORD dataSize = 0;
-        LONG retCode = ::RegGetValue(hKey,
-                                     xr::utf8_to_wide(subKey).c_str(),
-                                     xr::utf8_to_wide(value).c_str(),
-                                     RRF_SUBKEY_WOW6464KEY | RRF_RT_REG_SZ,
-                                     nullptr,
-                                     nullptr,
-                                     &dataSize);
-        if (retCode != ERROR_SUCCESS || !dataSize) {
-            return {};
-        }
-
-        std::wstring data(dataSize / sizeof(wchar_t), 0);
-        retCode = ::RegGetValue(hKey,
-                                xr::utf8_to_wide(subKey).c_str(),
-                                xr::utf8_to_wide(value).c_str(),
-                                RRF_SUBKEY_WOW6464KEY | RRF_RT_REG_SZ,
-                                nullptr,
-                                data.data(),
-                                &dataSize);
-        if (retCode != ERROR_SUCCESS) {
-            return {};
-        }
-
-        return data.substr(0, dataSize / sizeof(wchar_t) - 1);
-    }
-
-#else
     // Linux: the registry becomes ~/.config/opendesk/openxr.conf ("Name=value" lines) and OPENDESK_XR_<Name> variables
     using HKEY = int;
     static inline std::optional<std::string> ConfigValue(const std::string& value) {
@@ -480,7 +281,6 @@ namespace opendesk_openxr::utils {
         return std::wstring(v->begin(), v->end());
     }
 
-#endif
     static std::vector<const char*> ParseExtensionString(char* names) {
         std::vector<const char*> list;
         while (*names != 0) {
@@ -530,125 +330,6 @@ namespace opendesk_openxr::utils {
         return xrVector3f;
     }
 
-#ifdef _WIN32
-    static DXGI_FORMAT getTypelessFormat(DXGI_FORMAT format) {
-        switch (format) {
-        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-        case DXGI_FORMAT_R8G8B8A8_UNORM:
-            return DXGI_FORMAT_R8G8B8A8_TYPELESS;
-        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-        case DXGI_FORMAT_B8G8R8A8_UNORM:
-            return DXGI_FORMAT_B8G8R8A8_TYPELESS;
-        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
-        case DXGI_FORMAT_B8G8R8X8_UNORM:
-            return DXGI_FORMAT_B8G8R8X8_TYPELESS;
-        case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            return DXGI_FORMAT_R16G16B16A16_TYPELESS;
-        case DXGI_FORMAT_D32_FLOAT:
-            return DXGI_FORMAT_R32_TYPELESS;
-        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-            return DXGI_FORMAT_R32G8X24_TYPELESS;
-        case DXGI_FORMAT_D24_UNORM_S8_UINT:
-            return DXGI_FORMAT_R24G8_TYPELESS;
-        case DXGI_FORMAT_D16_UNORM:
-            return DXGI_FORMAT_R16_TYPELESS;
-        }
-
-        return format;
-    }
-
-    static bool isSRGBFormat(DXGI_FORMAT format) {
-        switch (format) {
-        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
-            return true;
-        }
-
-        return false;
-    }
-
-    static DXGI_FORMAT getShaderResourceViewFormat(DXGI_FORMAT format) {
-        switch (format) {
-        case DXGI_FORMAT_D32_FLOAT:
-            return DXGI_FORMAT_R32_FLOAT;
-        }
-
-        return format;
-    }
-
-    static DXGI_FORMAT getUnorderedAccessViewFormat(DXGI_FORMAT format) {
-        switch (format) {
-        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-            return DXGI_FORMAT_R8G8B8A8_UNORM;
-        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-            return DXGI_FORMAT_B8G8R8A8_UNORM;
-        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
-            return DXGI_FORMAT_B8G8R8X8_UNORM;
-        }
-
-        return format;
-    }
-
-    static ovrTextureFormat dxgiToOvrTextureFormat(DXGI_FORMAT format) {
-        switch (format) {
-        case DXGI_FORMAT_R8G8B8A8_UNORM:
-            return OVR_FORMAT_R8G8B8A8_UNORM;
-        case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-            return OVR_FORMAT_R8G8B8A8_UNORM_SRGB;
-        case DXGI_FORMAT_B8G8R8A8_UNORM:
-            return OVR_FORMAT_B8G8R8A8_UNORM;
-        case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-            return OVR_FORMAT_B8G8R8A8_UNORM_SRGB;
-        case DXGI_FORMAT_B8G8R8X8_UNORM:
-            return OVR_FORMAT_B8G8R8X8_UNORM;
-        case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
-            return OVR_FORMAT_B8G8R8X8_UNORM_SRGB;
-        case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            return OVR_FORMAT_R16G16B16A16_FLOAT;
-        case DXGI_FORMAT_D16_UNORM:
-            return OVR_FORMAT_D16_UNORM;
-        case DXGI_FORMAT_D24_UNORM_S8_UINT:
-            return OVR_FORMAT_D24_UNORM_S8_UINT;
-        case DXGI_FORMAT_D32_FLOAT:
-            return OVR_FORMAT_D32_FLOAT;
-        case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
-            return OVR_FORMAT_D32_FLOAT_S8X24_UINT;
-        default:
-            return OVR_FORMAT_UNKNOWN;
-        }
-    }
-
-    static DXGI_FORMAT ovrToDxgiTextureFormat(ovrTextureFormat format) {
-        switch (format) {
-        case OVR_FORMAT_R8G8B8A8_UNORM:
-            return DXGI_FORMAT_R8G8B8A8_UNORM;
-        case OVR_FORMAT_R8G8B8A8_UNORM_SRGB:
-            return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-        case OVR_FORMAT_B8G8R8A8_UNORM:
-            return DXGI_FORMAT_B8G8R8A8_UNORM;
-        case OVR_FORMAT_B8G8R8A8_UNORM_SRGB:
-            return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
-        case OVR_FORMAT_B8G8R8X8_UNORM:
-            return DXGI_FORMAT_B8G8R8X8_UNORM;
-        case OVR_FORMAT_B8G8R8X8_UNORM_SRGB:
-            return DXGI_FORMAT_B8G8R8X8_UNORM_SRGB;
-        case OVR_FORMAT_R16G16B16A16_FLOAT:
-            return DXGI_FORMAT_R16G16B16A16_FLOAT;
-        case OVR_FORMAT_D16_UNORM:
-            return DXGI_FORMAT_D16_UNORM;
-        case OVR_FORMAT_D24_UNORM_S8_UINT:
-            return DXGI_FORMAT_D24_UNORM_S8_UINT;
-        case OVR_FORMAT_D32_FLOAT:
-            return DXGI_FORMAT_D32_FLOAT;
-        case OVR_FORMAT_D32_FLOAT_S8X24_UINT:
-            return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
-        default:
-            return DXGI_FORMAT_UNKNOWN;
-        }
-    }
-
-#endif
     static ovrTextureFormat vkToOvrTextureFormat(VkFormat format) {
         switch (format) {
         case VK_FORMAT_R8G8B8A8_UNORM:
@@ -674,49 +355,6 @@ namespace opendesk_openxr::utils {
         }
     }
 
-#ifdef _WIN32
-    static ovrTextureFormat glToOvrTextureFormat(GLenum format) {
-        switch (format) {
-        case GL_RGBA8:
-            return OVR_FORMAT_R8G8B8A8_UNORM;
-        case GL_SRGB8_ALPHA8:
-            return OVR_FORMAT_R8G8B8A8_UNORM_SRGB;
-        case GL_RGBA16F:
-            return OVR_FORMAT_R16G16B16A16_FLOAT;
-        case GL_DEPTH_COMPONENT16:
-            return OVR_FORMAT_D16_UNORM;
-        case GL_DEPTH24_STENCIL8:
-            return OVR_FORMAT_D24_UNORM_S8_UINT;
-        case GL_DEPTH_COMPONENT32F:
-            return OVR_FORMAT_D32_FLOAT;
-        case GL_DEPTH32F_STENCIL8:
-            return OVR_FORMAT_D32_FLOAT_S8X24_UINT;
-        default:
-            return OVR_FORMAT_UNKNOWN;
-        }
-    }
-
-    static size_t glGetBytePerPixels(GLenum format) {
-        switch (format) {
-        case GL_DEPTH_COMPONENT16:
-            // TODO: This should be 2, but fails with "GL_INVALID_VALUE error generated. Memory object too small".
-            return 4;
-        case GL_RGBA8:
-        case GL_SRGB8_ALPHA8:
-        case GL_DEPTH24_STENCIL8:
-        case GL_DEPTH_COMPONENT32F:
-        case GL_R11F_G11F_B10F:
-        case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
-            return 4;
-        case GL_RGBA16F:
-        case GL_DEPTH32F_STENCIL8:
-            return 8;
-        default:
-            return 0;
-        }
-    }
-
-#endif
     static inline bool isValidSwapchainRect(ovrTextureSwapChainDesc desc, const XrRect2Di& rect) {
         if (rect.offset.x < 0 || rect.offset.y < 0 || rect.extent.width <= 0 || rect.extent.height <= 0) {
             return false;
@@ -729,20 +367,6 @@ namespace opendesk_openxr::utils {
         return true;
     }
 
-#ifdef _WIN32
-    static inline void setDebugName(ID3D11DeviceChild* resource, std::string_view name) {
-        if (resource && !name.empty()) {
-            resource->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(name.size()), name.data());
-        }
-    }
-
-    static inline void setDebugName(ID3D12Object* resource, std::string_view name) {
-        if (resource && !name.empty()) {
-            resource->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(name.size()), name.data());
-        }
-    }
-
-#endif
     static inline bool startsWith(const std::string& str, const std::string& substr) {
         return str.find(substr) == 0;
     }
@@ -752,37 +376,6 @@ namespace opendesk_openxr::utils {
         return pos != std::string::npos && pos == str.size() - substr.size();
     }
 
-#ifdef _WIN32
-#define DEFINE_DETOUR_FUNCTION(ReturnType, FunctionName, ...)                                                          \
-    ReturnType (*original_##FunctionName)(__VA_ARGS__) = nullptr;                                                      \
-    ReturnType hooked_##FunctionName(__VA_ARGS__)
-
-    // import-table patching (win_hook.h) where upstream uses Detours
-    template <typename TMethod>
-    void DetourDllAttach(const char* dll, const char* target, TMethod hooked, TMethod& original) {
-        if (original) {
-            // Already hooked.
-            return;
-        }
-        HMODULE handle;
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN, dll, &handle);
-        original = (TMethod)win_hook::attach(dll, target, (void*)hooked);
-        if (!original) {
-            original = (TMethod)GetProcAddress(handle, target);
-        }
-    }
-
-    template <typename TMethod>
-    void DetourDllDetach(const char* dll, const char* target, TMethod hooked, TMethod& original) {
-        if (!original) {
-            // Not hooked.
-            return;
-        }
-        win_hook::detach(dll, target, (void*)hooked, (void*)original);
-        original = nullptr;
-    }
-
-#endif
 } // namespace opendesk_openxr::utils
 
 #include "gpu_timers.h"

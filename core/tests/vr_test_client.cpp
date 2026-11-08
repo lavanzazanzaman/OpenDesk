@@ -1,11 +1,8 @@
 // Stand-in OpenXR app for the runtime interface: connects to the streamer's VR socket, renders the test scene
 // (purple sky) with the headset's latest pose into the shared DMA-BUFs and submits frames at the stream's rate.
-// Windows: the IPC and encode path only (the buffers are submitted as they are; the test scene is GLES/GBM).
 //   vr-test-client [SECONDS] [probe]
 #include "frame_data.h"
-#ifndef _WIN32
 #include "test_pattern.h"
-#endif
 #include "hardware_encoder.h" // default_render_node
 #include "vr_client.h"
 
@@ -31,10 +28,8 @@ int main(int argc, char ** argv)
 		std::this_thread::sleep_for(std::chrono::seconds(std::atoi(argv[1])));
 		return 0;
 	}
-#ifndef _WIN32
 	gbm_allocator alloc(vr_render_node());
 	vr_test_pattern pattern(alloc);
-#endif
 	int seconds = argc > 1 ? std::atoi(argv[1]) : 1000000;
 	auto end = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
 	uint32_t generation = 0;
@@ -73,7 +68,6 @@ int main(int argc, char ** argv)
 			for (int k = 0; k < 3; ++k)
 				info.eye[e].position[k] = head.position[k] + (e ? 1 : -1) * s.ipd / 2 * right[k];
 			info.fov[e] = s.fov[e];
-#ifndef _WIN32
 			const auto & img = client->eye_image(*slot, e);
 			dmabuf_image target;
 			target.fd = img.fd;
@@ -84,7 +78,6 @@ int main(int argc, char ** argv)
 			target.fourcc = img.desc.fourcc;
 			target.modifier = img.desc.modifier;
 			pattern.render(target, e, info.eye[e], info.fov[e], 1);
-#endif
 		}
 		if (!client->submit(*slot, info, monotonic_ns()))
 			return 1;

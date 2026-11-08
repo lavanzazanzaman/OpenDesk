@@ -17,6 +17,7 @@ QPushButton#closeButton { border-top-right-radius: 10px; }
 QPushButton#closeButton:hover { background: #C42B1C; }
 QLabel#footerStatus { color: #C9C4D8; font-size: 12px; }
 QLabel#footerVersion { color: #6E6A7C; font-size: 12px; }
+QPushButton#footerUpdate { background: #8B6CFF; color: #FFFFFF; font-size: 12px; border: none; border-radius: 4px; padding: 3px 10px; }
 
 QPushButton#tabButton {
     background: #15131C; color: #8A8699; font-size: 13px; font-weight: bold; letter-spacing: 1px;

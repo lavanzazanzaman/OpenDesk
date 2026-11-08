@@ -12,17 +12,6 @@
 #include "runtime_registration.h"
 #include "vr_sender.h"
 
-#ifdef _WIN32
-#include "audio_win.h"
-#include "dxvk_win.h"
-#include "gamepad_win.h"
-#include "input_win.h"
-#include "pulse_win.h"
-
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <windows.h>
-#else
 #include "audio.h"
 #include "gamepad.h"
 #include "input.h"
@@ -39,7 +28,6 @@
 #include <sys/socket.h>
 #include <sys/resource.h>
 #include <unistd.h>
-#endif
 
 #include <QDateTime>
 #include <QDesktopServices>
@@ -218,9 +206,6 @@ struct native_engine::session
 	void undo_mic()
 	{
 		mic.reset();
-#ifdef _WIN32
-		restore_default_mic(std::exchange(restore_source, {}));
-#endif
 		if (!pulse)
 			return;
 		if (!restore_source.empty())
@@ -238,32 +223,13 @@ struct native_engine::session
 native_engine::native_engine(QObject * parent) :
         QObject(parent)
 {
-#ifndef _WIN32
 	QDBusConnection::sessionBus().connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts", "layoutChanged", this,
 	                                      SLOT(on_keyboard_layout_changed(uint)));
 	foveated_layer::remove_leftovers();
-#endif
 }
 
 // SharedStreamerSettings.InputLanguage: Windows sends the layout's name; the headset picks its keyboard by it
 // (assets/languageLayouts.json) and falls back to US
-#ifdef _WIN32
-QString native_engine::input_language() const
-{
-	// GetKeyboardLayout(0) is the thread's active layout. Map the common KLIDs; anything else falls back to US,
-	// which is what the headset does for an unknown name too.
-	const quint32 id = quint32(quintptr(GetKeyboardLayout(0))) & 0xffff;
-	static const QMap<quint32, QString> names{
-	        {0x0409, "US"},          {0x0809, "United Kingdom"}, {0x0c09, "US"},        {0x0407, "German"},
-	        {0x0807, "Swiss German"}, {0x040c, "French"},        {0x0c0c, "Canadian French"},
-	        {0x0410, "Italian"},      {0x041d, "Swedish"},       {0x0419, "Russian"},   {0x0415, "Polish"},
-	        {0x041f, "Turkish Q"},    {0x0422, "Ukrainian"},     {0x040b, "Finnish"},   {0x0411, "Japanese"},
-	        {0x0416, "Portuguese (Brazil ABNT2)"}, {0x0816, "Portuguese"}, {0x0c0a, "Spanish"}, {0x040a, "Spanish"},
-	        {0x040e, "Hungarian"},    {0x0412, "Korean"},        {0x0804, "Chinese"},   {0x0404, "Chinese"},
-	};
-	return names.value(id, "US");
-}
-#else
 QString native_engine::input_language() const
 {
 	QDBusMessage layout = QDBusConnection::sessionBus().call(
@@ -307,11 +273,10 @@ void native_engine::on_keyboard_layout_changed(uint)
 	if (current && current->messaging)
 		send_streamer_settings({{"InputLanguage", input_language()}}, false);
 }
-#endif
 
 native_engine::~native_engine()
 {
-	openxr_runtime::restore(); // hand the system its OpenXR runtime back (Windows: when that needs no UAC prompt)
+	openxr_runtime::restore(); // hand the system its OpenXR runtime back
 	openvr_runtime::restore(); // ... and its OpenVR runtime
 	if (vr)
 		vr->set_sink(nullptr);
@@ -484,18 +449,6 @@ void native_engine::set_options(QJsonObject o)
 		options.audio_mode = o["audio_mode"].toInt();
 	if (o.contains("virtual_audio"))
 		options.virtual_audio = o["virtual_audio"].toBool();
-	if (o.contains("dxvk_default") || o.contains("dxvk_games"))
-	{
-		options.dxvk_default = o["dxvk_default"].toBool(options.dxvk_default);
-		if (o.contains("dxvk_games"))
-		{
-			options.dxvk_games.clear();
-			const QJsonObject games_o = o["dxvk_games"].toObject();
-			for (auto it = games_o.begin(); it != games_o.end(); ++it)
-				options.dxvk_games[it.key()] = it.value().toBool();
-		}
-		QMetaObject::invokeMethod(this, [this] { sync_dxvk(); }, Qt::QueuedConnection);
-	}
 	if (o.contains("boost_priority"))
 	{
 		options.boost_priority = o["boost_priority"].toBool();
@@ -770,14 +723,9 @@ void native_engine::on_messaging_connection()
 				}
 				if (m->type == uint8_t(message_type::screenshot_to_desktop))
 					save_screenshot(m->payload);
-#ifndef _WIN32
 				if (m->type == uint8_t(message_type::change_language)) // layoutChanged then updates InputLanguage
 					QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(
 					        "org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts", "switchToNextLayout"));
-#else
-				if (m->type == uint8_t(message_type::change_language))
-					ActivateKeyboardLayout(reinterpret_cast<HKL>(static_cast<intptr_t>(HKL_NEXT)), 0);
-#endif
 				if (m->type == uint8_t(message_type::switch_monitor) || m->type == uint8_t(message_type::add_monitor) ||
 				    m->type == uint8_t(message_type::remove_monitor) || m->type == uint8_t(message_type::set_monitor_portrait))
 					on_monitor_message(m->type, m->payload);
@@ -911,11 +859,7 @@ void native_engine::on_data_connection()
 			int w = options.desktop_width, h = options.desktop_height;
 			if (w > 0 && h > 0)
 				current->injector->set_layout({w, h, {{{0, 0, w, h}, {}}}});
-#ifdef _WIN32
-			info(QString("[input] input injection ready (pointers as %1)").arg(options.touch ? "touch" : "mouse"));
-#else
 			info(QString("uinput devices ready (pointers as %1)").arg(options.touch ? "touch" : "mouse"));
-#endif
 		}
 		catch (const std::exception & e)
 		{
@@ -1151,26 +1095,12 @@ void native_engine::update_video(bool force)
 	if (!sess->displays)
 	{
 		sess->displays = std::make_unique<display_manager>();
-#ifndef _WIN32 // Windows: DXGI capture, logged by the capture itself
 		if (!sess->displays->is_kwin())
 			info(sess->displays->is_x11() ? QString("[capture] X11 session: monitors from XRandR, grabbed directly (MIT-SHM)")
 			                               : "[capture] KWin screen cast unavailable (" + sess->displays->kwin_unavailable_reason() +
 			                                         ") - using the desktop portal (no virtual monitors)");
-#endif
 		connect(sess->displays.get(), &display_manager::restore_token, this, [this](QString t) { save_portal_token(t); });
 		connect(sess->displays.get(), &display_manager::log, this, &native_engine::info);
-#ifdef _WIN32
-		// the Virtual Display Driver's monitors appear a few seconds after the request: the extra display becomes the
-		// main screen then (displays_changed restarts the stream)
-		connect(sess->displays.get(), &display_manager::virtual_ready, this, [this, sess](QString name) {
-			if (current.get() != sess || !sess->extra_display || sess->has_switched_monitor)
-				return;
-			auto all = sess->displays->displays();
-			for (size_t i = 0; i < all.size(); ++i)
-				if (all[i].name == name.toStdString())
-					sess->monitor_start = int(i);
-		});
-#endif
 		connect(sess->displays.get(), &display_manager::displays_changed, this, [this, sess] {
 			if (current.get() != sess || !sess->displays)
 				return;
@@ -1256,11 +1186,9 @@ void native_engine::update_video(bool force)
 		if (!setup)
 		{
 			info(QString("[capture] cannot capture %1: %2").arg(QString::fromStdString(d.name), error));
-#ifndef _WIN32
 			for (auto & s: setups)
 				if (s.pipewire_fd >= 0)
 					::close(s.pipewire_fd);
-#endif
 			return; // the watchdog retries
 		}
 		setup->bounds = {scaled(d.x - min_x), scaled(d.y - min_y), scaled(d.width), scaled(d.height)};
@@ -1347,59 +1275,6 @@ void native_engine::stop_video_source(session * sess)
 		sess->video.reset();
 }
 
-#ifdef _WIN32
-// Windows: xrizer comes with the installer (<install>\xrizer) or OPENDESK_XRIZER; there is no download step
-void native_engine::fetch_xrizer()
-{
-	if (xrizer_fetch_started)
-		return;
-	xrizer_fetch_started = true;
-	info("[openvr] xrizer is not installed: OpenVR games need SteamVR (reinstall OpenDesk or set OPENDESK_XRIZER)");
-}
-
-// "Boost game priority": the VR app's process above normal and its render thread at highest priority. Both work on
-// the user's own processes without administrator rights (elevated games refuse; that is reported).
-void native_engine::apply_game_priority()
-{
-	if (options.boost_priority && render_tid > 0 && boosted_tid != render_tid)
-	{
-		HANDLE process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_pid));
-		HANDLE thread = OpenThread(THREAD_SET_INFORMATION | THREAD_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_tid));
-		bool ok = thread && SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
-		if (process)
-		{
-			if (GetPriorityClass(process) == NORMAL_PRIORITY_CLASS)
-				SetPriorityClass(process, ABOVE_NORMAL_PRIORITY_CLASS);
-			CloseHandle(process);
-		}
-		if (thread)
-			CloseHandle(thread);
-		if (ok)
-		{
-			boosted_tid = render_tid;
-			info(QString("[priority] VR app (pid %1): render thread %2 at highest priority").arg(render_pid).arg(render_tid));
-		}
-		else
-			info(QString("[priority] cannot raise the VR app's priority (error %1)").arg(GetLastError()));
-	}
-	else if (!options.boost_priority && boosted_tid > 0)
-	{
-		if (HANDLE thread = OpenThread(THREAD_SET_INFORMATION, FALSE, DWORD(boosted_tid)))
-		{
-			SetThreadPriority(thread, THREAD_PRIORITY_NORMAL);
-			CloseHandle(thread);
-		}
-		if (HANDLE process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(render_pid)))
-		{
-			if (GetPriorityClass(process) == ABOVE_NORMAL_PRIORITY_CLASS)
-				SetPriorityClass(process, NORMAL_PRIORITY_CLASS);
-			CloseHandle(process);
-		}
-		info(QString("[priority] VR app render thread %1 back to normal priority").arg(boosted_tid));
-		boosted_tid = 0;
-	}
-}
-#else
 // our xrizer (never a system install) is missing: tools/get_xrizer.sh downloads xrizer's CI nightly, once per run
 void native_engine::fetch_xrizer()
 {
@@ -1454,8 +1329,6 @@ void native_engine::apply_game_priority()
 	}
 }
 
-#endif
-
 void native_engine::update_vr_server()
 {
 	// system OpenXR runtime: ours while the streamer runs, the user's own again afterwards
@@ -1465,13 +1338,8 @@ void native_engine::update_vr_server()
 		if (error.empty())
 		{
 			runtime_registered = true;
-#ifdef _WIN32
-			info(QString("[openxr] OpenDesk XR is the active OpenXR runtime (%1)")
-			             .arg(QString::fromStdString(openxr_runtime::installed_manifest())));
-#else
 			info(QString("[openxr] OpenDesk XR is the active OpenXR runtime (%1); restored when the streamer exits")
 			             .arg(QString::fromStdString(openxr_runtime::installed_manifest())));
-#endif
 		}
 		else if (error.starts_with("pending"))
 		{
@@ -1548,11 +1416,7 @@ void native_engine::update_vr_server()
 				});
 			};
 			vr = std::make_unique<vr_server>(vr_render_node(), cb);
-#ifdef _WIN32
-			info(QString("[vr-ipc] OpenXR runtime pipe ready: %1").arg(QString::fromStdWString(ipc::pipe_name())));
-#else
 			info(QString("[vr-ipc] OpenXR runtime socket ready: %1").arg(QString::fromStdString(ipc::socket_path())));
-#endif
 			if (vr_encode_node() != vr_render_node())
 				info(QString("[vr] two graphics cards: VR games render on %1, the stream is encoded on %2")
 				             .arg(QString::fromStdString(vr_render_node()), QString::fromStdString(vr_encode_node())));
@@ -1867,9 +1731,6 @@ void native_engine::sync_extra_display()
 		schedule_video_restart(500);
 }
 
-#ifdef _WIN32
-void native_engine::map_touch_outputs(int) {} // touch injection already targets the right screen
-#else
 void native_engine::map_touch_outputs(int attempt)
 {
 	// KWin maps a touchscreen onto one output (org.kde.KWin.InputDevice.outputName); udev + KWin need a moment
@@ -1903,7 +1764,6 @@ void native_engine::map_touch_outputs(int attempt)
 	else
 		info("[input] could not map the touchscreens to their monitors (KWin D-Bus)");
 }
-#endif
 
 // ---------------------------------------------------------------------------------------------------------------
 // Games tab
@@ -2010,58 +1870,12 @@ void native_engine::send_games()
 			for (const auto & g: self->games)
 				oculus += g.platform == game_platform::oculus_rift;
 			self->info(QString("[games] %1 RiftLift, %2 Steam VR").arg(oculus).arg(self->games.size() - size_t(oculus)));
-			self->sync_dxvk();
 			self->poll_games(false); // fresh running state; the list below carries it
 			self->send_message(message_type::games, games_list(self->games, self->games_running));
 		});
 	});
 }
 
-#ifdef _WIN32
-void native_engine::sync_dxvk()
-{
-	if (games.empty())
-	{
-		if (!games_scanning && (options.dxvk_default || !options.dxvk_games.isEmpty()))
-		{
-			games_scanning = true;
-			QPointer<native_engine> self(this);
-			QThreadPool::globalInstance()->start([self] {
-				auto found = scan_games();
-				QMetaObject::invokeMethod(self, [self, found = std::move(found)]() mutable {
-					if (!self)
-						return;
-					self->games_scanning = false;
-					self->games = std::move(found);
-					self->sync_dxvk();
-				});
-			});
-		}
-		return;
-	}
-	// file copies off the engine thread; one pass over every game (placing or removing as the settings say)
-	std::vector<std::pair<game_entry, bool>> work;
-	for (const auto & g: games)
-	{
-		const bool want = dxvk::wanted(g, options.dxvk_default, options.dxvk_games);
-		work.push_back({g, want});
-	}
-	QPointer<native_engine> self(this);
-	QThreadPool::globalInstance()->start([self, work = std::move(work)] {
-		auto log = [self](QString line) {
-			QMetaObject::invokeMethod(self, [self, line] {
-				if (self)
-					self->info(line);
-			});
-		};
-		for (const auto & [g, want]: work)
-			if (want || dxvk::installed(g))
-				dxvk::apply(g, want, log);
-	});
-}
-#else
-void native_engine::sync_dxvk() {} // Linux: Proton brings DXVK
-#endif
 
 void native_engine::launch_game(game_id id)
 {
@@ -2076,50 +1890,11 @@ void native_engine::launch_game(game_id id)
 		return info(QString("[games] %1 is already running").arg(g->name));
 
 	QProcess p;
-#ifdef _WIN32
-	QString log_dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/logs";
-#else
 	QString log_dir = (qEnvironmentVariableIsEmpty("XDG_STATE_HOME") ? QDir::homePath() + "/.local/state" : qEnvironmentVariable("XDG_STATE_HOME")) + "/opendesk";
-#endif
 	QDir().mkpath(log_dir);
 	p.setStandardOutputFile(log_dir + "/game-launch.log", QIODevice::Append);
 	p.setStandardErrorFile(log_dir + "/game-launch.log", QIODevice::Append);
 	qint64 pid = 0;
-#ifdef _WIN32
-	if (g->platform == game_platform::oculus_rift)
-	{
-		// The original streamer starts OculusClient (the store's runtime UI) first when it is not running: games
-		// query it for the library and entitlements, and some refuse to start without it.
-		if (!platform::any_process_has("OculusClient.exe"))
-		{
-			QString client = oculus_client_executable();
-			if (QFileInfo::exists(client))
-			{
-				QProcess c;
-				c.setProgram(client);
-				c.setWorkingDirectory(QFileInfo(client).absolutePath());
-				c.startDetached();
-			}
-		}
-		if (g->launch_exe.isEmpty() || !QFileInfo::exists(g->launch_exe))
-			return fail(QString("launch: %1 is not installed").arg(g->name));
-		p.setProgram(g->launch_exe);
-		p.setWorkingDirectory(g->install_dir);
-		if (!g->launch_args.isEmpty())
-			p.setArguments(QProcess::splitCommand(g->launch_args));
-	}
-	else
-	{
-		// Steam handles the vr://-style launch URL itself, including starting the client when needed.
-		if (!QDesktopServices::openUrl(QUrl(QString("steam://launch/%1/vr").arg(qulonglong(g->app_id)))))
-			return fail("launch: the Steam client is not available");
-		info(QString("[games] launching %1 (steam://launch/%2/vr)").arg(g->name).arg(qulonglong(g->app_id)));
-		games_launching[id] = QDateTime::currentMSecsSinceEpoch();
-		vr_wait_until_ms = QDateTime::currentMSecsSinceEpoch() + 120'000;
-		games_running.insert(id);
-		return;
-	}
-#else
 	if (g->platform == game_platform::oculus_rift)
 	{
 		QString exe = riftlift_executable();
@@ -2135,14 +1910,11 @@ void native_engine::launch_game(game_id id)
 		p.setProgram(steam.isEmpty() ? "xdg-open" : steam);
 		p.setArguments({QString("steam://launch/%1/vr").arg(qulonglong(g->app_id))});
 	}
-#endif
 	if (!p.startDetached(&pid))
 		return fail(QString("launch: could not start %1").arg(p.program()));
 	info(QString("[games] launching %1 (%2 %3)").arg(g->name, p.program(), p.arguments().join(' ')));
-#ifndef _WIN32
 	if (g->platform == game_platform::oculus_rift)
 		riftlift_pids[id] = pid;
-#endif
 	games_launching[id] = QDateTime::currentMSecsSinceEpoch();
 	vr_wait_until_ms = QDateTime::currentMSecsSinceEpoch() + 120'000;
 	games_running.insert(id); // the headset already shows it as running
@@ -2508,18 +2280,6 @@ void native_engine::setup_audio_output(session * sess)
 		info("[audio] 'Computer only': not streaming desktop audio");
 		return;
 	}
-#ifdef _WIN32
-	// WASAPI loopback of the default output; "VR headset only" mutes the PC's speakers while streaming (no virtual
-	// output device on Windows without a driver)
-	device = options.audio_mode == 1 ? "mute-speakers" : "default";
-	sess->audio.reset(); // a previous sender restores the speakers before the new one mutes them
-	sess->audio = std::make_unique<desktop_audio_sender>(*sess->audio_out, device, audio_enabled);
-	sess->audio->set_paused(bool(sess->player));
-	info(QString("[audio] %1: capturing the default output -> headset (s16le 48 kHz stereo, 5 ms)%2%3")
-	             .arg(options.audio_mode == 1 ? "VR headset only" : "VR headset & computer",
-	                  options.audio_mode == 1 ? ", PC speakers muted while streaming" : "", sess->encrypted ? ", encrypted" : ""));
-	return;
-#endif
 	if (options.audio_mode == 1 && pa)
 	{
 		if (options.virtual_audio)
@@ -2569,23 +2329,7 @@ void native_engine::on_mic_packet(session * sess, const uint8_t * pcm, size_t si
 			}
 		}
 		sess->mic = std::make_unique<mic_player>(float(sess->user.value("MicVolume").toDouble(0.85)));
-#ifdef _WIN32
-		const QString cable = QString::fromStdString(virtual_mic_device());
-		if (virtual_mic_available())
-		{
-			if (options.auto_select_mic)
-				sess->restore_source = select_virtual_mic();
-			info(QString("[audio] headset mic -> '%1'%2").arg(cable, !sess->restore_source.empty()
-			                                                                ? " ('CABLE Output' selected as the default microphone)"
-			                                                                : " (apps record it from 'CABLE Output')"));
-		}
-		else
-			info(QString("[audio] headset mic not forwarded: no '%1' device. Windows needs a virtual audio cable for this - "
-			             "install VB-CABLE (vb-audio.com/Cable), then choose 'CABLE Output' as the microphone in your apps")
-			             .arg(cable));
-#else
 		info(QString("[audio] headset mic -> 'OpenDesk Microphone'%1").arg(options.auto_select_mic ? " (selected as default input)" : ""));
-#endif
 	}
 	sess->mic->push(pcm, size);
 }

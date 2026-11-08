@@ -1,4 +1,3 @@
-#ifndef _WIN32 // Linux: xdg-desktop-portal GlobalShortcuts; the Windows stub is below
 #include "shortcuts.h"
 #include "settings.h"
 
@@ -145,20 +144,3 @@ void GlobalShortcuts::onActivated(const QDBusObjectPath & session, const QString
 		emit activated(id);
 }
 
-#else // _WIN32
-
-#include "shortcuts.h"
-
-// Windows global hotkeys are not registered yet; the BINDINGS tab stays read-only.
-GlobalShortcuts::GlobalShortcuts(QObject * parent) :
-        QObject(parent)
-{
-}
-
-void GlobalShortcuts::bind() {}
-
-bool GlobalShortcuts::available() const
-{
-	return false;
-}
-#endif

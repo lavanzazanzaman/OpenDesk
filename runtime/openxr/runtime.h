@@ -22,11 +22,7 @@
 
 #pragma once
 
-#ifdef _WIN32
-#include "framework/win/dispatch.gen.h" // + D3D11/D3D12/OpenGL, win32 time, audio GUIDs
-#else
 #include "framework/dispatch.gen.h"
-#endif
 
 #include "accessibility.h"
 #include "utils.h"
@@ -216,27 +212,11 @@ namespace opendesk_openxr {
         XrResult xrGetVulkanGraphicsRequirementsKHR(XrInstance instance,
                                                     XrSystemId systemId,
                                                     XrGraphicsRequirementsVulkanKHR* graphicsRequirements) override;
-#ifdef _WIN32
-        XrResult xrGetD3D11GraphicsRequirementsKHR(XrInstance instance,
-                                                   XrSystemId systemId,
-                                                   XrGraphicsRequirementsD3D11KHR* graphicsRequirements) override;
-        XrResult xrGetD3D12GraphicsRequirementsKHR(XrInstance instance,
-                                                   XrSystemId systemId,
-                                                   XrGraphicsRequirementsD3D12KHR* graphicsRequirements) override;
-#endif
         XrResult xrGetVisibilityMaskKHR(XrSession session,
                                         XrViewConfigurationType viewConfigurationType,
                                         uint32_t viewIndex,
                                         XrVisibilityMaskTypeKHR visibilityMaskType,
                                         XrVisibilityMaskKHR* visibilityMask) override;
-#ifdef _WIN32
-        XrResult xrConvertWin32PerformanceCounterToTimeKHR(XrInstance instance,
-                                                           const LARGE_INTEGER* performanceCounter,
-                                                           XrTime* time) override;
-        XrResult xrConvertTimeToWin32PerformanceCounterKHR(XrInstance instance,
-                                                           XrTime time,
-                                                           LARGE_INTEGER* performanceCounter) override;
-#endif
         XrResult xrConvertTimespecTimeToTimeKHR(XrInstance instance,
                                                 const struct timespec* timespecTime,
                                                 XrTime* time) override;
@@ -273,12 +253,6 @@ namespace opendesk_openxr {
         XrResult xrLocateHandJointsEXT(XrHandTrackerEXT handTracker,
                                        const XrHandJointsLocateInfoEXT* locateInfo,
                                        XrHandJointLocationsEXT* locations) override;
-#ifdef _WIN32
-        XrResult xrGetAudioOutputDeviceGuidOculus(XrInstance instance,
-                                                  wchar_t buffer[XR_MAX_AUDIO_DEVICE_STR_SIZE_OCULUS]) override;
-        XrResult xrGetAudioInputDeviceGuidOculus(XrInstance instance,
-                                                 wchar_t buffer[XR_MAX_AUDIO_DEVICE_STR_SIZE_OCULUS]) override;
-#endif
         XrResult xrCreateEyeTrackerFB(XrSession session,
                                       const XrEyeTrackerCreateInfoFB* createInfo,
                                       XrEyeTrackerFB* eyeTracker) override;
@@ -324,63 +298,6 @@ namespace opendesk_openxr {
             uint32_t extensionVersion;
         };
 
-#ifdef _WIN32
-        struct SwapchainSlice {
-            ovrTextureSwapChain ovrSwapchain{nullptr};
-            std::vector<ComPtr<ID3D11Texture2D>> images;
-            int lastCommittedIndex{-1};
-
-            // Resources for copy/resolve/pre-processing.
-            std::vector<ComPtr<ID3D11ShaderResourceView>> srvs;
-            std::vector<ComPtr<ID3D11UnorderedAccessView>> uavs;
-            std::vector<ComPtr<ID3D11RenderTargetView>> rtvs;
-            std::vector<ComPtr<ID3D11DepthStencilView>> dsvs;
-        };
-
-        struct IntermediateTexture {
-            ComPtr<ID3D11Texture2D> image;
-            ComPtr<ID3D11ShaderResourceView> srv;
-            ComPtr<ID3D11UnorderedAccessView> uav;
-        };
-
-        struct Swapchain {
-            // The OVR swapchain objects and images we return to the application.
-            SwapchainSlice appSwapchain;
-            int ovrSwapchainLength{0};
-
-            // For texture arrays and multisample swapchains, we must resolve into another swapchain that will actually
-            // be used by OVR.
-            std::vector<SwapchainSlice> resolvedSlices;
-
-            // The last manipulated swapchain image index.
-            std::deque<int> acquiredIndices;
-            int lastWaitedIndex{-1};
-            int lastReleasedIndex{-1};
-            bool dirty{false};
-            uint32_t nextIndex{0};
-
-            // For precompositor needs (drawing our own stereo projection).
-            SwapchainSlice stereoProjection[xr::StereoView::Count];
-            IntermediateTexture intermediate[xr::StereoView::Count];
-
-            // Whether a static image swapchain has been acquired at least once.
-            bool frozen{false};
-
-            // Resources needed for interop.
-            std::vector<ComPtr<ID3D11Texture2D>> d3d11Images;
-            std::vector<ComPtr<ID3D12Resource>> d3d12Images;
-            std::vector<VkDeviceMemory> vkDeviceMemory;
-            std::vector<VkImage> vkImages;
-            std::vector<GLuint> glMemory;
-            std::vector<GLuint> glImages;
-
-            // Information recorded at creation.
-            XrSwapchainCreateInfo xrDesc;
-            DXGI_FORMAT dxgiFormatForSubmission{DXGI_FORMAT_UNKNOWN};
-            ovrTextureSwapChainDesc ovrDesc;
-        };
-
-#else
         // Linux: an XR swapchain is one libovr-opendesk swapchain whose VkImages the app renders into directly (texture array
         // slices are selected per layer), so there is no copy/resolve step and every "slice" is the app chain.
         struct SwapchainSlice {
@@ -406,7 +323,6 @@ namespace opendesk_openxr {
             ovrTextureSwapChainDesc ovrDesc;
         };
 
-#endif
         struct PrecompositorState {
             // State for the current frame.
             std::set<std::pair<Swapchain*, uint32_t>> resolvedSwapchainImages;
@@ -615,41 +531,6 @@ namespace opendesk_openxr {
         void asyncSubmissionThread();
         void waitForAsyncSubmissionIdle(bool doRunningStart = false);
 
-#ifdef _WIN32
-        // d3d11_native.cpp
-        XrResult initializeD3D11(const XrGraphicsBindingD3D11KHR& d3dBindings);
-        void cleanupD3D11();
-        void initializeSubmissionDevice(const std::string& appGraphicsApi);
-        void initializeSubmissionResources();
-        void cleanupSubmissionDevice();
-        std::vector<HANDLE> getSwapchainImages(Swapchain& xrSwapchain);
-        XrResult getSwapchainImagesD3D11(Swapchain& xrSwapchain, XrSwapchainImageD3D11KHR* d3d11Images, uint32_t count);
-        void resolveSwapchainImage(Swapchain& xrSwapchain,
-                                   uint32_t slice,
-                                   std::set<std::pair<Swapchain*, uint32_t>>& resolved,
-                                   bool skipCommit = false);
-        void ensureSwapchainSliceResources(Swapchain& xrSwapchain, uint32_t slice) const;
-        void ensureSwapchainPrecompositorResources(Swapchain& xrSwapchain, const ovrSizei& resolution) const;
-        void populateSwapchainSlice(const Swapchain& xrSwapchain,
-                                    const ovrTextureSwapChainDesc& desc,
-                                    SwapchainSlice& slice,
-                                    uint32_t sliceIndex,
-                                    const char* debugName) const;
-        void flushD3D11Context();
-        void flushSubmissionContext();
-        void serializeD3D11Frame();
-        void waitOnSubmissionDevice();
-        bool requireNTHandleSharing() const;
-
-        // d3d12_interop.cpp
-        XrResult initializeD3D12(const XrGraphicsBindingD3D12KHR& d3dBindings);
-        void cleanupD3D12();
-        bool isD3D12Session() const;
-        XrResult getSwapchainImagesD3D12(Swapchain& xrSwapchain, XrSwapchainImageD3D12KHR* d3d12Images, uint32_t count);
-        void flushD3D12CommandQueue();
-        void serializeD3D12Frame();
-
-#else
         // linux_graphics.cpp (replaces d3d11_native.cpp for the Linux/Vulkan-only build)
         void resolveSwapchainImage(Swapchain& xrSwapchain,
                                    uint32_t slice,
@@ -660,7 +541,6 @@ namespace opendesk_openxr {
         void flushSubmissionContext();
         void waitOnSubmissionDevice();
 
-#endif
         // vulkan_interop.cpp
         XrResult initializeVulkan(const XrGraphicsBindingVulkanKHR& vkBindings);
         void initializeVulkanDispatch(VkInstance instance);
@@ -672,7 +552,6 @@ namespace opendesk_openxr {
         void flushVulkanCommandQueue();
         void serializeVulkanFrame();
 
-#ifndef _WIN32
         // linux_opengl.cpp: GL renders into the swapchains of a private Vulkan device (a Vulkan session underneath)
         struct LinuxOpenGL;
         std::shared_ptr<LinuxOpenGL> m_linuxGl;
@@ -684,34 +563,9 @@ namespace opendesk_openxr {
         XrResult getSwapchainImagesLinuxOpenGL(Swapchain& xrSwapchain, XrSwapchainImageOpenGLKHR* glImages, uint32_t count);
         void cleanupSwapchainImagesLinuxOpenGL(Swapchain& xrSwapchain);
         void finishLinuxOpenGLFrame();
-#endif
-#ifdef _WIN32
-        // opengl_interop.cpp
-        XrResult initializeOpenGL(const XrGraphicsBindingOpenGLWin32KHR& glBindings);
-        void initializeOpenGLDispatch();
-        void cleanupOpenGL();
-        bool isOpenGLSession() const;
-        XrResult getSwapchainImagesOpenGL(Swapchain& xrSwapchain, XrSwapchainImageOpenGLKHR* glImages, uint32_t count);
-        void cleanupSwapchainImagesOpenGL(Swapchain& xrSwapchain);
-        void flushOpenGLContext();
-        void serializeOpenGLFrame();
-
-        // precompositor.cpp
-        void upscaler(Swapchain** swapchains, const XrSwapchainSubImage** subImages, ovrLayerEyeFov& layer);
-        void initializePrecompositorResources();
-
-#endif
         // visibility_mask.cpp
         void convertSteamVRToOpenXRHiddenMesh(const ovrFovPort& fov, XrVector2f* vertices, uint32_t count) const;
 
-#ifdef _WIN32
-        // mirror_window.cpp
-        void createMirrorWindow();
-        void updateMirrorWindow(bool preferSRGB = false);
-        LRESULT CALLBACK mirrorWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-        friend LRESULT CALLBACK wndProcWrapper(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-#endif
         // Instance & OVR state.
         uint32_t m_apiMinor{0};
         bool m_isOVRLoaded{false};
@@ -764,29 +618,7 @@ namespace opendesk_openxr {
 
         // Session state.
         bool m_isHeadless{false};
-#ifdef _WIN32
-        ComPtr<ID3D11Device5> m_ovrSubmissionDevice;
-        ComPtr<ID3D11DeviceContext4> m_ovrSubmissionContext;
-        ComPtr<ID3DDeviceContextState> m_ovrSubmissionContextState;
-        ComPtr<ID3D11Fence> m_ovrSubmissionFence;
-        wil::unique_handle m_eventForSubmissionFence;
-        UINT m_gpuVendor{0};
         bool m_syncGpuWorkInEndFrame{false};
-        ComPtr<ID3D11SamplerState> m_linearClampSampler;
-        ComPtr<ID3D11SamplerState> m_pointClampSampler;
-        ComPtr<ID3D11DepthStencilState> m_noDepthReadState;
-        ComPtr<ID3D11VertexShader> m_fullQuadVS;
-        ComPtr<ID3D11PixelShader> m_resolveMultisampledDepthPS;
-        ComPtr<ID3D11Buffer> m_resolveMultisampledDepthConstants;
-        ComPtr<ID3D11ComputeShader> m_alphaCorrectShader;
-        ComPtr<ID3D11Buffer> m_alphaCorrectConstants;
-        ComPtr<ID3D11ComputeShader> m_sharpenShader;
-        ComPtr<ID3D11ComputeShader> m_upscaleShader;
-        ComPtr<ID3D11Buffer> m_upscalerConstants;
-        ComPtr<IDXGISwapChain1> m_dxgiSwapchain;
-#else
-        bool m_syncGpuWorkInEndFrame{false};
-#endif
         bool m_sessionCreated{false};
         XrSessionState m_sessionState{XR_SESSION_STATE_UNKNOWN};
         std::deque<std::pair<XrSessionState, double>> m_sessionEventQueue;
@@ -858,15 +690,6 @@ namespace opendesk_openxr {
         // Mirror window.
         bool m_useMirrorWindow{false};
         std::mutex m_mirrorWindowMutex;
-#ifdef _WIN32
-        HWND m_mirrorWindowHwnd{nullptr};
-        bool m_mirrorWindowReady{false};
-        std::thread m_mirrorWindowThread;
-        ComPtr<IDXGISwapChain1> m_mirrorWindowSwapchain;
-        ovrMirrorTexture m_ovrMirrorSwapChain{nullptr};
-        ComPtr<ID3D11Texture2D> m_mirrorTexture;
-
-#endif
         // Async submission thread.
         bool m_useAsyncSubmission{false};
         bool m_needStartAsyncSubmissionThread{false};
@@ -884,15 +707,6 @@ namespace opendesk_openxr {
         wil::unique_handle m_bodyStateEvent;
 
         // Graphics API interop.
-#ifdef _WIN32
-        ComPtr<ID3D11Device5> m_d3d11Device;
-        ComPtr<ID3D11DeviceContext4> m_d3d11Context;
-        ComPtr<ID3DDeviceContextState> m_d3d11ContextState;
-        ComPtr<ID3D12Device> m_d3d12Device;
-        ComPtr<ID3D12CommandQueue> m_d3d12CommandQueue;
-        ComPtr<ID3D12CommandAllocator> m_d3d12CommandAllocator;
-        ComPtr<ID3D12GraphicsCommandList> m_d3d12CommandList;
-#endif
         VkInstance m_vkBootstrapInstance{VK_NULL_HANDLE};
         VkPhysicalDevice m_vkBootstrapPhysicalDevice{VK_NULL_HANDLE};
         VkInstance m_vkInstance{VK_NULL_HANDLE};
@@ -906,18 +720,7 @@ namespace opendesk_openxr {
         VkPhysicalDeviceMemoryProperties m_vkMemoryProperties;
         VkQueue m_vkQueue{VK_NULL_HANDLE};
         uint32_t m_vkQueueFamilyIndex{0};
-#ifdef _WIN32
-        GlContext m_glContext{};
-        // Pointers in the dispatcher must be initialized in initializeOpenGLDispatch().
-        GlDispatch m_glDispatch;
-
-        ComPtr<ID3D11Fence> m_d3d11Fence;
-        ComPtr<ID3D12Fence> m_d3d12Fence;
-#endif
         VkSemaphore m_vkTimelineSemaphore{VK_NULL_HANDLE};
-#ifdef _WIN32
-        GLuint m_glSemaphore{0};
-#endif
         UINT64 m_fenceValue{0};
 
         // Due to Vulkan semaphore transference rules(?) it looks like we may not be able to both signal and wait on an

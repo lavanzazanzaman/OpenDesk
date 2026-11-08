@@ -65,39 +65,6 @@ namespace opendesk_openxr {
         bool hasGraphicsBindings = false;
         const XrBaseInStructure* entry = reinterpret_cast<const XrBaseInStructure*>(createInfo->next);
         while (entry) {
-#ifdef _WIN32
-            if (has_XR_KHR_D3D11_enable && entry->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR) {
-                if (!m_graphicsRequirementQueried) {
-                    return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
-                }
-
-                const XrGraphicsBindingD3D11KHR* d3dBindings =
-                    reinterpret_cast<const XrGraphicsBindingD3D11KHR*>(entry);
-
-                const auto result = initializeD3D11(*d3dBindings);
-                if (XR_FAILED(result)) {
-                    return result;
-                }
-
-                hasGraphicsBindings = true;
-                break;
-            } else if (has_XR_KHR_D3D12_enable && entry->type == XR_TYPE_GRAPHICS_BINDING_D3D12_KHR) {
-                if (!m_graphicsRequirementQueried) {
-                    return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
-                }
-
-                const XrGraphicsBindingD3D12KHR* d3dBindings =
-                    reinterpret_cast<const XrGraphicsBindingD3D12KHR*>(entry);
-
-                const auto result = initializeD3D12(*d3dBindings);
-                if (XR_FAILED(result)) {
-                    return result;
-                }
-
-                hasGraphicsBindings = true;
-                break;
-            } else
-#endif
             if ((has_XR_KHR_vulkan_enable || has_XR_KHR_vulkan_enable2) &&
                        entry->type == XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR) {
                 if (!m_graphicsRequirementQueried) {
@@ -114,25 +81,7 @@ namespace opendesk_openxr {
 
                 hasGraphicsBindings = true;
                 break;
-#ifdef _WIN32
-            } else if (has_XR_KHR_opengl_enable && entry->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR) {
-                if (!m_graphicsRequirementQueried) {
-                    return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
-                }
-
-                const XrGraphicsBindingOpenGLWin32KHR* glBindings =
-                    reinterpret_cast<const XrGraphicsBindingOpenGLWin32KHR*>(entry);
-
-                const auto result = initializeOpenGL(*glBindings);
-                if (XR_FAILED(result)) {
-                    return result;
-                }
-
-                hasGraphicsBindings = true;
-                break;
-#endif
             }
-#ifndef _WIN32
             if (has_XR_KHR_opengl_enable && entry->type == XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR) {
                 if (!m_graphicsRequirementQueried) {
                     return XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING;
@@ -144,7 +93,6 @@ namespace opendesk_openxr {
                 hasGraphicsBindings = true;
                 break;
             }
-#endif
 
             entry = entry->next;
         }
@@ -164,16 +112,11 @@ namespace opendesk_openxr {
             if (has_XR_MND_headless) {
                 // If we pre-emptively enabled invisible mode, re-initialize OVR for visible session.
                 enterVisibleMode();
-#ifndef _WIN32
                 if (isVulkanSession()) {
                     bindVulkanToOVRSession();
                 }
-#endif
             }
 
-#ifdef _WIN32
-            initializePrecompositorResources();
-#endif
         } else {
             // We initialize a submission device since OVR needs one to create a swapchain before being able to wait
             // frames.
@@ -262,21 +205,6 @@ namespace opendesk_openxr {
             m_bodyStateWatcherThread = {};
         }
 
-#ifdef _WIN32
-        // Shutdown the mirror window.
-        if (m_mirrorWindowThread.joinable()) {
-            // Avoid race conditions where the window will not receive the message.
-            while (!m_mirrorWindowReady) {
-                std::this_thread::sleep_for(100ms);
-            }
-            while (m_mirrorWindowHwnd) {
-                PostMessage(m_mirrorWindowHwnd, WM_CLOSE, 0, 0);
-            }
-            m_mirrorWindowThread.join();
-            m_mirrorWindowThread = {};
-        }
-
-#endif
         // Destroy hand trackers (tied to session).
         for (auto handTracker : m_handTrackers) {
             HandTracker* xrHandTracker = (HandTracker*)handTracker;
@@ -320,16 +248,8 @@ namespace opendesk_openxr {
 
         // FIXME: Add session and frame resource cleanup here.
         m_accessibilityHelper.reset();
-#ifdef _WIN32
-        cleanupOpenGL();
-#else
         endLinuxOpenGLSession();
-#endif
         cleanupVulkan();
-#ifdef _WIN32
-        cleanupD3D12();
-        cleanupD3D11();
-#endif
         cleanupSubmissionDevice();
         m_sessionState = XR_SESSION_STATE_UNKNOWN;
         m_sessionEventQueue.clear(); // undelivered events of this session must not reach the next one

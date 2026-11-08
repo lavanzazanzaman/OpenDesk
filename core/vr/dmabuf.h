@@ -11,19 +11,15 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
 struct gbm_device;
 struct gbm_bo;
-#endif
 
 namespace od
 {
 struct dmabuf_image
 {
-#ifndef _WIN32
 	gbm_bo * bo = nullptr;
-#endif
-	native_handle fd = no_handle; // Linux: DMA-BUF / OPAQUE_FD; Windows: OPAQUE_WIN32 NT handle (vk_buffers.h)
+	native_handle fd = no_handle; // DMA-BUF / OPAQUE_FD (vk_buffers.h)
 	uint32_t width = 0, height = 0, stride = 0, offset = 0;
 	uint32_t fourcc = 0; // DRM_FORMAT_XRGB8888
 	uint64_t modifier = 0; // DRM_FORMAT_MOD_LINEAR
@@ -37,7 +33,6 @@ struct dmabuf_image
 	static uint64_t next_id();
 };
 
-#ifndef _WIN32
 class gbm_allocator
 {
 public:
@@ -57,5 +52,4 @@ private:
 	bool queried = false;
 	std::string query_detail;
 };
-#endif
 } // namespace od

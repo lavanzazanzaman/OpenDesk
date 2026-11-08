@@ -40,7 +40,6 @@ struct desktop_stream_setup
 	int expected_width = 0, expected_height = 0; // pixels; announced until the first frame tells the real size
 	bool x11 = false;      // X11 session: grabbed from the root window at x11_x, x11_y (expected size)
 	int x11_x = 0, x11_y = 0;
-	bool windows = false;  // Windows: DXGI Desktop Duplication
 	int monitor_index = -1;
 };
 

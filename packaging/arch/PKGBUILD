@@ -31,7 +31,7 @@ build() {
 package() {
 	DESTDIR="$pkgdir" cmake --install build
 	install -Dm644 "$(_src)/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-	# third-party licenses (OpenDesk XR, FidelityFX FSR 1, ...)
+	# third-party licenses (OpenDesk XR, ...)
 	find "$(_src)/runtime" "$(_src)/third_party" -maxdepth 4 -type f \( -iname 'license*' -o -iname 'copying*' \) -print0 |
 		while IFS= read -r -d '' f; do install -Dm644 "$f" "$pkgdir/usr/share/licenses/$pkgname/${f#$(_src)/}"; done
 }

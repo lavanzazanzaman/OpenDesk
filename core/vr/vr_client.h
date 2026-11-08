@@ -17,7 +17,7 @@ class vr_client
 public:
 	struct image
 	{
-		native_handle fd = no_handle; // owned by the client (Linux: fd, Windows: NT handle of the Vulkan memory)
+		native_handle fd = no_handle; // owned by the client
 		ipc::image_desc desc{};
 	};
 
@@ -52,11 +52,6 @@ private:
 	vr_client() = default;
 	void drop_config();
 	native_handle fd = no_handle; // the connection: Unix socket / named pipe
-#ifdef _WIN32
-	struct win32_io;
-	std::unique_ptr<win32_io> io;
-	bool send_message(const void * data, size_t size) const;
-#endif
 	ipc::config_msg config_{};
 	std::vector<image> images;
 	std::vector<bool> busy;

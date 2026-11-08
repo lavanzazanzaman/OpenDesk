@@ -26,10 +26,6 @@
 #include "runtime.h"
 #include "utils.h"
 
-#ifdef _WIN32
-#include "AlphaBlendingCS.h"
-#endif
-
 namespace opendesk_openxr {
 
     using namespace opendesk_openxr::log;
@@ -45,7 +41,6 @@ namespace opendesk_openxr {
         alignas(4) bool isSRGB;
     };
 
-#ifndef _WIN32
     namespace {
         // libovr-opendesk alpha modes (ovrLayerHeader::Reserved[2]): bit 0 opaque, bit 1 unpremultiplied alpha.
         // The bottom layer and layers without XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT are opaque.
@@ -60,7 +55,6 @@ namespace opendesk_openxr {
             return mode;
         }
     } // namespace
-#endif
 
     // https://www.khronos.org/registry/OpenXR/specs/1.0/html/xrspec.html#xrWaitFrame
     XrResult OpenXrRuntime::xrWaitFrame(XrSession session,
@@ -92,14 +86,10 @@ namespace opendesk_openxr {
                           TLArg(!!m_hmdStatus.ShouldRecenter, "ShouldRecenter"),
                           TLArg(!!m_hmdStatus.ShouldQuit, "ShouldQuit"));
         if (!m_sessionLossPending) {
-#ifdef _WIN32
-            m_sessionLossPending = !m_hmdStatus.HmdPresent || m_hmdStatus.DisplayLost || m_hmdStatus.ShouldQuit;
-#else
             // Linux: the headset going away (VD app closed, crashed, Quest asleep) is not a session loss - nothing would
             // ever end it, the app keeps its session and rendering resumes once the headset is back (IsVisible gates it
             // meanwhile). Only losing the streamer itself is final.
             m_sessionLossPending = m_hmdStatus.DisplayLost || m_hmdStatus.ShouldQuit;
-#endif
         }
         if (!m_shouldRecenter && m_hmdStatus.ShouldRecenter) {
             // We will send one event for each world-locked reference space (LOCAL, STAGE and LOCAL_FLOOR_EXT).
@@ -154,26 +144,6 @@ namespace opendesk_openxr {
                 m_frameCondVar.wait(lock, [&] { return m_frameBegun == m_frameWaited; });
                 TraceLoggingWriteStop(waitBeginFrame, "WaitBeginFrame");
             }
-
-#ifdef _WIN32 // libovr-opendesk paces frames without a device
-            // Workaround: OVR cannot wait for a frame without having a device. If no swapchain was created up to this
-            // point, we must create one to initialize OVR.
-            if (m_frameWaited == 0) {
-                // Make as small as possible of a memory footprint...
-                ovrTextureSwapChainDesc desc{};
-                desc.Type = ovrTexture_2D;
-                desc.StaticImage = true;
-                desc.ArraySize = 1;
-                desc.Width = desc.Height = 128;
-                desc.MipLevels = 1;
-                desc.SampleCount = 1;
-                desc.Format = OVR_FORMAT_B8G8R8A8_UNORM;
-
-                CHECK_OVRCMD(ovr_CreateTextureSwapChainDX(
-                    m_ovrSession, m_ovrSubmissionDevice.Get(), &desc, &m_headlessSwapchain));
-            }
-
-#endif
 
             if (m_needStartAsyncSubmissionThread) {
                 m_terminateAsyncThread = false;
@@ -422,36 +392,12 @@ namespace opendesk_openxr {
                 // context.
             }
 
-#ifdef _WIN32
-            // Serializes the app work between D3D12/Vulkan and D3D11.
-            if (isD3D12Session()) {
-                serializeD3D12Frame();
-            } else if (isVulkanSession()) {
-                serializeVulkanFrame();
-            } else if (isOpenGLSession()) {
-                serializeOpenGLFrame();
-            } else if (!m_isHeadless) {
-                serializeD3D11Frame();
-            }
-
-#else
             if (isLinuxOpenGLSession()) {
                 finishLinuxOpenGLFrame(); // everything the app drew has landed in the shared images
             }
             if (isVulkanSession()) {
                 serializeVulkanFrame();
             }
-#endif
-
-#ifdef _WIN32
-            // Ensure that we always restore the application device context if needed.
-            auto scopeGuard = MakeScopeGuard([&] {
-                if (m_d3d11ContextState) {
-                    m_d3d11Context->SwapDeviceContextState(m_d3d11ContextState.Get(), nullptr);
-                    m_d3d11ContextState.Reset();
-                }
-            });
-#endif
 
             const auto lastPrecompositionTime = m_gpuTimerPrecomposition[m_currentTimerIndex]
                                                     ? m_gpuTimerPrecomposition[m_currentTimerIndex]->query()
@@ -485,11 +431,7 @@ namespace opendesk_openxr {
                 m_precompositor.layerIndex = i;
 
                 // OpenGL needs to flip the texture vertically, which OVR can conveniently do for us.
-#ifdef _WIN32
-                if (isOpenGLSession()) {
-#else
                 if (isLinuxOpenGLSession()) {
-#endif
                     layer.Header.Flags = ovrLayerFlag_TextureOriginAtBottomLeft;
                 }
 
@@ -602,26 +544,6 @@ namespace opendesk_openxr {
                 TraceLoggingWriteStop(endFrame, "OVR_EndFrame");
             }
 
-#ifdef _WIN32
-            // Defer initialization of mirror window resources until they are first needed.
-            try {
-                if (!m_isHeadless && m_useMirrorWindow && !m_mirrorWindowThread.joinable()) {
-                    createMirrorWindow();
-                }
-                updateMirrorWindow(m_precompositor.isProj0SRGB);
-            } catch (std::exception& exc) {
-                TraceLoggingWrite(g_traceProvider, "MirrorWindow", TLArg(exc.what(), "Error"));
-                ErrorLog("Failed to update the mirror window: %s\n", exc.what());
-            }
-
-            // When using RenderDoc, signal a frame through the dummy swapchain.
-            if (m_dxgiSwapchain) {
-                m_dxgiSwapchain->Present(0, 0);
-                m_ovrSubmissionContext->Flush();
-            }
-
-#endif
-
             if (m_useAsyncSubmission) {
                 TraceLoggingWrite(g_traceProvider,
                                   "SubmitLayers",
@@ -715,11 +637,7 @@ namespace opendesk_openxr {
             }
 
             if (m_precompositor.isFirstProjectionLayer) {
-#ifdef _WIN32
-                m_precompositor.isProj0SRGB = isSRGBFormat(xrSwapchain.dxgiFormatForSubmission);
-#else
                 m_precompositor.isProj0SRGB = xrSwapchain.isSRGB;
-#endif
             }
 
             // We only upscale the bottom projection layer and only the focus view (when applicable).
@@ -734,14 +652,9 @@ namespace opendesk_openxr {
                                   needUpscaling /* Skip committing if we will not use the swapchain directly */);
             layer.EyeFov.ColorTexture[viewIndex] =
                 xrSwapchain.resolvedSlices[proj.views[viewIndex].subImage.imageArrayIndex].ovrSwapchain;
-#ifndef _WIN32
             // libovr-opendesk: array slice per eye + alpha mode (see linux_graphics.cpp)
             layer.EyeFov.Header.Reserved[viewIndex] = (char)proj.views[viewIndex].subImage.imageArrayIndex;
             layer.EyeFov.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, proj.layerFlags);
-#else
-            // libovr-opendesk: the precompositor already fixed up alpha; only the bottom layer is opaque
-            layer.EyeFov.Header.Reserved[2] = (char)(m_precompositor.layerIndex == 0 ? 1 : 0);
-#endif
 
             if (!isValidSwapchainRect(xrSwapchain.ovrDesc, proj.views[viewIndex].subImage.imageRect)) {
                 return XR_ERROR_SWAPCHAIN_RECT_INVALID;
@@ -853,13 +766,6 @@ namespace opendesk_openxr {
                 layer.EyeFov.RenderPose[ovrEye_Left], layer.EyeFov.RenderPose[ovrEye_Right], m_lastSeenIpd.value());
         }
 
-#ifdef _WIN32
-        // Run the upscaler or sharpening if needed.
-        if (swapchains[xr::StereoView::Right]) {
-            upscaler(swapchains, subImages, layer.EyeFov);
-        }
-#endif
-
         return XR_SUCCESS;
     }
 
@@ -949,12 +855,8 @@ namespace opendesk_openxr {
         // Fill out color buffer information.
         resolveSwapchainImage(xrSwapchain, quad.subImage.imageArrayIndex, m_precompositor.resolvedSwapchainImages);
         layer.Quad.ColorTexture = xrSwapchain.resolvedSlices[quad.subImage.imageArrayIndex].ovrSwapchain;
-#ifndef _WIN32
         layer.Quad.Header.Reserved[0] = layer.Quad.Header.Reserved[1] = (char)quad.subImage.imageArrayIndex;
         layer.Quad.Header.Reserved[2] = (char)linuxAlphaMode(m_precompositor.layerIndex, quad.layerFlags);
-#else
-        layer.Quad.Header.Reserved[2] = (char)(m_precompositor.layerIndex == 0 ? 1 : 0);
-#endif
 
         if (!isValidSwapchainRect(xrSwapchain.ovrDesc, quad.subImage.imageRect)) {
             return XR_ERROR_SWAPCHAIN_RECT_INVALID;
@@ -1081,115 +983,14 @@ namespace opendesk_openxr {
                                                  uint32_t slice,
                                                  XrCompositionLayerFlags compositionFlags,
                                                  XrRect2Di viewport) {
-#ifdef _WIN32
-        if (!xrSwapchain.dirty) {
-            return;
-        }
-
-        const bool needClearAlpha =
-            (layerIndex > 0 && !(compositionFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT));
-        // Workaround: this is questionable, but an app should always submit layer 0 without alpha-blending (ie: alpha =
-        // 1). This avoids needing to run the premultiply alpha shader only do multiply all values by 1...
-        const bool needPremultiplyAlpha =
-            layerIndex > 0 && (compositionFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT);
-
-        const int ovrDestIndex = xrSwapchain.resolvedSlices[slice].lastCommittedIndex;
-
-        TraceLoggingWrite(g_traceProvider,
-                          "PreprocessSwapchainImage",
-                          TLArg(ovrDestIndex, "DestIndex"),
-                          TLArg(slice, "Slice"),
-                          TLArg(needClearAlpha, "NeedClearAlpha"),
-                          TLArg(needPremultiplyAlpha, "needPremultiplyAlpha"));
-
-        if ((needClearAlpha || needPremultiplyAlpha) && ovrDestIndex >= 0) {
-            // Circumvent some of OVR's limitations:
-            // - For alpha-blended layers, we must pre-process the alpha channel.
-
-            ensurePreprocessResources();
-
-            // We are about to do something destructive to the application context. Save the context. It will be
-            // restored at the end of xrEndFrame().
-            if (m_d3d11Device == m_ovrSubmissionDevice && !m_d3d11ContextState) {
-                m_ovrSubmissionContext->SwapDeviceContextState(m_ovrSubmissionContextState.Get(),
-                                                               m_d3d11ContextState.ReleaseAndGetAddressOf());
-            }
-
-            m_ovrSubmissionContext->CSSetShader(m_alphaCorrectShader.Get(), nullptr, 0);
-            {
-                AlphaBlendingCSConstants constants{};
-                constants.offset = viewport.offset;
-                constants.dimension = viewport.extent;
-                constants.ignoreAlpha = needClearAlpha;
-                constants.isPremultipliedAlpha = !needPremultiplyAlpha;
-                constants.isSRGB = isSRGBFormat((DXGI_FORMAT)xrSwapchain.xrDesc.format);
-
-                D3D11_MAPPED_SUBRESOURCE mappedResources;
-                CHECK_HRCMD(m_ovrSubmissionContext->Map(
-                    m_alphaCorrectConstants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedResources));
-                memcpy(mappedResources.pData, &constants, sizeof(constants));
-                m_ovrSubmissionContext->Unmap(m_alphaCorrectConstants.Get(), 0);
-                m_ovrSubmissionContext->CSSetConstantBuffers(0, 1, m_alphaCorrectConstants.GetAddressOf());
-            }
-
-            if ((int)xrSwapchain.resolvedSlices[slice].uavs.size() <= ovrDestIndex) {
-                xrSwapchain.resolvedSlices[slice].uavs.resize(ovrDestIndex + 1);
-            }
-            if (!xrSwapchain.resolvedSlices[slice].uavs[ovrDestIndex]) {
-                D3D11_UNORDERED_ACCESS_VIEW_DESC desc{};
-                desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-                desc.Format = getUnorderedAccessViewFormat(xrSwapchain.dxgiFormatForSubmission);
-                CHECK_HRCMD(m_ovrSubmissionDevice->CreateUnorderedAccessView(
-                    xrSwapchain.resolvedSlices[slice].images[ovrDestIndex].Get(),
-                    &desc,
-                    xrSwapchain.resolvedSlices[slice].uavs[ovrDestIndex].ReleaseAndGetAddressOf()));
-                setDebugName(xrSwapchain.resolvedSlices[slice].uavs[ovrDestIndex].Get(),
-                             fmt::format("Runtime Slice UAV[{}, {}, {}]", slice, ovrDestIndex, (void*)&xrSwapchain));
-            }
-            m_ovrSubmissionContext->CSSetUnorderedAccessViews(
-                0, 1, xrSwapchain.resolvedSlices[slice].uavs[ovrDestIndex].GetAddressOf(), nullptr);
-
-            m_ovrSubmissionContext->Dispatch((viewport.extent.width + 31) / 32, (viewport.extent.height + 31) / 32, 1);
-
-            // Unbind all resources to avoid D3D validation errors.
-            {
-                m_ovrSubmissionContext->CSSetShader(nullptr, nullptr, 0);
-                ID3D11Buffer* nullCBV[] = {nullptr};
-                m_ovrSubmissionContext->CSSetConstantBuffers(0, 1, nullCBV);
-                ID3D11UnorderedAccessView* nullUAV[] = {nullptr};
-                m_ovrSubmissionContext->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-            }
-        }
-#endif
     }
 
     void OpenXrRuntime::ensurePreprocessResources() {
-#ifdef _WIN32
-        CHECK_HRCMD(m_ovrSubmissionDevice->CreateComputeShader(
-            g_AlphaBlendingCS_blob().data(), g_AlphaBlendingCS_blob().size(), nullptr, m_alphaCorrectShader.ReleaseAndGetAddressOf()));
-        setDebugName(m_alphaCorrectShader.Get(), "AlphaBlending CS");
-        {
-            D3D11_BUFFER_DESC desc{};
-            desc.ByteWidth = ((sizeof(AlphaBlendingCSConstants) + 15) / 16) * 16;
-            desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-            desc.Usage = D3D11_USAGE_DYNAMIC;
-            desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-            CHECK_HRCMD(
-                m_ovrSubmissionDevice->CreateBuffer(&desc, nullptr, m_alphaCorrectConstants.ReleaseAndGetAddressOf()));
-            setDebugName(m_alphaCorrectConstants.Get(), "AlphaBlending Constants");
-        }
-#endif
     }
 
     void OpenXrRuntime::asyncSubmissionThread() {
         TraceLocalActivity(local);
         TraceLoggingWriteStart(local, "AsyncSubmissionThread");
-
-#ifdef _WIN32
-        SetThreadPriority(GetCurrentThread(),
-                          getSetting("async_submission_priority").value_or(THREAD_PRIORITY_TIME_CRITICAL));
-#endif
 
         std::optional<long long> lastWaitedFrameId;
         while (true) {

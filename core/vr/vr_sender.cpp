@@ -1,7 +1,5 @@
 #include "vr_sender.h"
-#ifndef _WIN32
 #include "test_pattern.h"
-#endif
 #include "hardware_encoder.h"
 #include "vr_ipc.h"
 
@@ -351,12 +349,6 @@ void vr_sender::adapt_speed(double ms)
 void vr_sender::run_test_pattern()
 {
 	using clock = std::chrono::steady_clock;
-#ifdef _WIN32
-	// the GLES/GBM test scene is a Linux development aid (OPENDESK_VR_TEST_PATTERN)
-	(void)sizeof(clock);
-	cb.log("[vr] the built-in VR test pattern is not available on Windows");
-	alive = false;
-#else
 	try
 	{
 		gbm_allocator alloc(node);
@@ -383,6 +375,5 @@ void vr_sender::run_test_pattern()
 		cb.log(std::string("[vr] error: ") + e.what());
 		alive = false;
 	}
-#endif
 }
 } // namespace od

@@ -1,4 +1,4 @@
-// VR stream buffers as exportable Vulkan memory (OPAQUE_FD; on Windows OPAQUE_WIN32 NT handles, on every GPU) instead of GBM DMA-BUFs: what NVIDIA needs (its GBM
+// VR stream buffers as exportable Vulkan memory (OPAQUE_FD) instead of GBM DMA-BUFs: what NVIDIA needs (its GBM
 // has no linear render buffers, and NVENC reads CUDA memory, which imports OPAQUE_FD but not DMA-BUF). Same idea as
 // WiVRn's NVENC path. Each buffer holds an NV12/P010 frame; the runtime's compositor converts its composited image
 // into it, the encoder imports the same memory (CUDA for NVENC, a Vulkan readback otherwise).
@@ -46,23 +46,4 @@ private:
 	struct impl;
 	std::unique_ptr<impl> p;
 };
-#ifdef _WIN32
-// Windows, encoders that take D3D11 frames (AMF, Media Foundation): copies an OPAQUE_WIN32 stream buffer (NV12/P010
-// rows, chroma at uv_offset) into one slice of a shared D3D11 texture array (the encoder's frame pool) with a GPU copy,
-// so the frame never passes through system memory
-class opaque_buffer_copier
-{
-public:
-	// texture: the NT handle of a shared NV12/P010 texture array of `layers` slices (D3D11_RESOURCE_MISC_SHARED_NTHANDLE)
-	opaque_buffer_copier(const std::string & render_node, void * texture, uint32_t width, uint32_t height, uint32_t layers, bool ten_bit);
-	~opaque_buffer_copier();
-	// returns once the copy finished on the GPU
-	void copy(native_handle memory, uint64_t size, uint64_t buffer_bytes, uint64_t buffer_id, uint32_t stride, uint32_t uv_offset,
-	          uint32_t layer);
-
-private:
-	struct impl;
-	std::unique_ptr<impl> p;
-};
-#endif
 } // namespace od

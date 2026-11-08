@@ -56,7 +56,6 @@ namespace opendesk_openxr {
             return XR_ERROR_FORM_FACTOR_UNSUPPORTED;
         }
 
-#ifndef _WIN32
         // Hover Junkers uses OpenVR 1.0.3 exclusively. Proton also probes its
         // unrelated WineOpenXR bridge when DXVK starts; CachyOS Proton 11 then
         // asks Wine Vulkan for an unsupported OpenXR device extension and D3D11
@@ -68,7 +67,6 @@ namespace opendesk_openxr {
             Log("Hover Junkers compatibility: bypassing the unused WineOpenXR probe; OpenVR uses xrizer\n");
             return XR_ERROR_FORM_FACTOR_UNAVAILABLE;
         }
-#endif
 
         // This is the latest point where we can defer initialization of LibOVR and the OVR session.
         if (!ensureOVRSession()) {
@@ -316,7 +314,7 @@ namespace opendesk_openxr {
     }
 
     bool OpenXrRuntime::initializeOVR() {
-        // libovr-opendesk (linked directly) talks to the OpenDesk streamer: its VR socket on Linux, its named pipe on Windows
+        // libovr-opendesk (linked directly) talks to the OpenDesk streamer: its VR socket
         m_useOculusRuntime = false;
         if (!ovr_Detect(0).IsOculusServiceRunning) {
             OnceLog("OpenDesk Streamer is not running with VR enabled\n");
@@ -334,28 +332,6 @@ namespace opendesk_openxr {
     }
 
     void OpenXrRuntime::identifyOpenDesk() {
-#ifdef _WIN32
-        std::wstring version(
-            RegGetString(HKEY_LOCAL_MACHINE, "SOFTWARE\\OpenDesk\\Streamer", "Version")
-                .value_or(L"Unknown"));
-        Log("Streamer: %ls\n", version.c_str());
-        TraceLoggingWrite(g_traceProvider, "OpenDeskVersion", TLArg(version.data(), "Version"));
-
-        try {
-            std::stringstream ss(xr::wide_to_utf8(version));
-            std::string component;
-            std::getline(ss, component, '.');
-            const int major = std::stoi(component);
-            std::getline(ss, component, '.');
-            const int minor = std::stoi(component);
-            std::getline(ss, component, '.');
-            const int release = std::stoi(component);
-
-            // FIXME: Identify version-specific quirks.
-
-        } catch (std::exception&) {
-        }
-#endif
     }
 
     void OpenXrRuntime::enterVisibleMode() {
@@ -400,23 +376,10 @@ namespace opendesk_openxr {
         }
 
         // Calibrate the timestamp conversion.
-#ifdef _WIN32
-        m_ovrTimeFromQpcTimeOffset = INFINITY;
-        for (int i = 0; i < 100; i++) {
-            LARGE_INTEGER now;
-            QueryPerformanceCounter(&now);
-            const double qpcTime = (double)now.QuadPart / m_qpcFrequency.QuadPart;
-            m_ovrTimeFromQpcTimeOffset = std::min(m_ovrTimeFromQpcTimeOffset, ovr_GetTimeInSeconds() - qpcTime);
-        }
-#endif
         m_ovrTimeFromTimeSpecTimeOffset = INFINITY;
         for (int i = 0; i < 100; i++) {
             timespec now{};
-#ifdef _WIN32
-            timespec_get(&now, TIME_UTC);
-#else
             clock_gettime(CLOCK_MONOTONIC, &now); // XR_KHR_convert_timespec_time: CLOCK_MONOTONIC on Linux
-#endif
             const double tsTime = (double)now.tv_sec + (now.tv_nsec / 1e9f);
             m_ovrTimeFromTimeSpecTimeOffset =
                 std::min(m_ovrTimeFromTimeSpecTimeOffset, ovr_GetTimeInSeconds() - tsTime);
@@ -427,35 +390,6 @@ namespace opendesk_openxr {
                           TLArg(m_ovrTimeFromTimeSpecTimeOffset, "OvrTimeFromTimeSpecTimeOffset"));
 
         m_isLowVideoMemorySystem = false;
-#ifdef _WIN32
-        {
-            // Detect low memory systems.
-            ComPtr<IDXGIFactory1> dxgiFactory;
-            CHECK_HRCMD(CreateDXGIFactory1(IID_PPV_ARGS(dxgiFactory.ReleaseAndGetAddressOf())));
-
-            ComPtr<IDXGIAdapter1> dxgiAdapter;
-            for (UINT adapterIndex = 0;; adapterIndex++) {
-                // EnumAdapters1 will fail with DXGI_ERROR_NOT_FOUND when there are no more adapters to
-                // enumerate.
-                CHECK_HRCMD(dxgiFactory->EnumAdapters1(adapterIndex, dxgiAdapter.ReleaseAndGetAddressOf()));
-
-                DXGI_ADAPTER_DESC1 desc;
-                CHECK_HRCMD(dxgiAdapter->GetDesc1(&desc));
-                if (!memcmp(&desc.AdapterLuid, &m_adapterLuid, sizeof(LUID))) {
-                    ComPtr<IDXGIAdapter3> dxgiAdapter3;
-                    if (SUCCEEDED(dxgiAdapter->QueryInterface(dxgiAdapter3.ReleaseAndGetAddressOf()))) {
-                        DXGI_QUERY_VIDEO_MEMORY_INFO queryVideoMemory;
-                        if (SUCCEEDED(dxgiAdapter3->QueryVideoMemoryInfo(
-                                0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &queryVideoMemory))) {
-                            m_isLowVideoMemorySystem = queryVideoMemory.Budget < 3'758'096'384;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-#endif
         initializeSystem();
 
         return true;
@@ -567,7 +501,7 @@ namespace opendesk_openxr {
         }
     }
 
-    // Hands, eyes, face and body come with the headset's FrameData through libovr-opendesk (Linux and Windows)
+    // Hands, eyes, face and body come with the headset's FrameData through libovr-opendesk
     void OpenXrRuntime::initializeBodyTrackingMmf() {
         m_bodyState = new BodyTracking::BodyStateV2{};
     }

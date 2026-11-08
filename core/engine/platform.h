@@ -1,5 +1,5 @@
 // Small platform helpers shared by the engine: process enumeration, process termination, the Steam
-// installation root, and an OS description. Linux and Windows implementations live in platform.cpp.
+// installation root, and an OS description. The implementation lives in platform.cpp.
 #pragma once
 
 #include <QString>
@@ -16,13 +16,13 @@ struct process_entry
 	int ppid = 0;
 	qulonglong start = 0; // creation token: safe against pid reuse
 	QString exe;          // full path when available
-	QStringList args;     // Linux: command line; Windows: empty
+	QStringList args;     // command line
 };
 
-// One pass over the process list (Linux: /proc, Windows: Toolhelp).
+// One pass over the process list (/proc).
 std::vector<process_entry> processes();
 
-// A process whose executable path or command line contains `needle` (case-insensitive on Windows).
+// A process whose executable path or command line contains `needle`.
 bool any_process_has(const QString & needle);
 
 bool terminate_process(int pid, bool force);

@@ -1,13 +1,9 @@
 #include "channel.h"
 
-#ifdef _WIN32
-#include "audio_win.h" // send_all
-#else
 #include "audio.h" // send_all
 
 #include <linux/sockios.h>
 #include <sys/ioctl.h>
-#endif
 
 namespace od
 {
@@ -36,13 +32,9 @@ bool stream_channel::send(const uint8_t * data, size_t size)
 
 stream_channel::queue stream_channel::queued() const
 {
-#ifdef _WIN32
-	return {}; // no SIOCOUTQ on Winsock; only the VR sender (Linux) uses this
-#else
 	queue q;
 	if (ioctl(fd, SIOCOUTQ, &q.total) < 0 || ioctl(fd, SIOCOUTQNSD, &q.unsent) < 0)
 		return {};
 	return q;
-#endif
 }
 } // namespace od

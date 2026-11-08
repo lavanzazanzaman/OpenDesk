@@ -8,13 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#ifdef _WIN32
-#include "dxvk_interop.h"
-#include <d3d11_4.h>
-#include <dxgi1_2.h>
-#else
 #include <unistd.h>
-#endif
 
 namespace od::ovr
 {
@@ -41,16 +35,10 @@ void check(VkResult r, const char * what)
 		throw std::runtime_error(std::string(what) + " failed (" + std::to_string(int(r)) + ")");
 }
 
-#ifdef _WIN32
-constexpr auto opaque_memory = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-constexpr auto opaque_semaphore = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
-#else
 constexpr auto opaque_memory = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
 constexpr auto opaque_semaphore = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
-#endif
 
 // an exported memory / semaphore handle on its way into another device. Linux: the import takes the fd on success;
-// Windows: NT handles stay ours (closed here once imported, or not).
 struct moved_handle
 {
 	native_handle h = no_handle;
@@ -58,41 +46,20 @@ struct moved_handle
 	~moved_handle() { reset(); }
 	void imported()
 	{
-#ifndef _WIN32
 		h = no_handle; // the driver owns it now
-#endif
 	}
 	void reset()
 	{
 		if (!owned || h == no_handle)
 			return;
-#ifdef _WIN32
-		CloseHandle(h);
-#else
 		close(h);
-#endif
 		h = no_handle;
 	}
 };
 
-#ifdef _WIN32
-template <class T>
-T * query(IUnknown * from) // QueryInterface, nullptr if not
-{
-	T * out = nullptr;
-	if (from)
-		from->QueryInterface(__uuidof(T), reinterpret_cast<void **>(&out));
-	return out;
-}
-
-using memory_import_info = VkImportMemoryWin32HandleInfoKHR;
-constexpr auto memory_import_type = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
-void set_handle(memory_import_info & i, native_handle h) { i.handle = h; }
-#else
 using memory_import_info = VkImportMemoryFdInfoKHR;
 constexpr auto memory_import_type = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
 void set_handle(memory_import_info & i, native_handle h) { i.fd = h; }
-#endif
 
 struct push_constants
 {
@@ -109,13 +76,8 @@ static_assert(sizeof(push_constants) <= 128); // the guaranteed push-constant si
 const char * required_device_extensions()
 {
 	// external semaphores: GPU-side sync with the compositor (without them it falls back to CPU waits)
-#ifdef _WIN32
-	return "VK_KHR_external_memory VK_KHR_external_memory_win32 VK_KHR_dedicated_allocation VK_KHR_get_memory_requirements2 "
-	       "VK_KHR_external_semaphore VK_KHR_external_semaphore_win32";
-#else
 	return "VK_KHR_external_memory VK_KHR_external_memory_fd VK_KHR_dedicated_allocation VK_KHR_get_memory_requirements2 "
 	       "VK_KHR_external_semaphore VK_KHR_external_semaphore_fd";
-#endif
 }
 
 VkFormat vk_format_for(int f, bool & depth, bool & srgb)
@@ -143,15 +105,9 @@ compositor::compositor(VkPhysicalDevice pd, VkDevice dev, VkQueue q, uint32_t fa
         app_physical(pd), app_device(dev), app_queue(q), app_family(fam)
 {
 	vkGetPhysicalDeviceMemoryProperties(app_physical, &app_memory_properties);
-#ifdef _WIN32
-	get_memory_fd = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(vkGetDeviceProcAddr(app_device, "vkGetMemoryWin32HandleKHR"));
-	if (!get_memory_fd)
-		throw std::runtime_error("the application's Vulkan device lacks VK_KHR_external_memory_win32");
-#else
 	get_memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(app_device, "vkGetMemoryFdKHR"));
 	if (!get_memory_fd)
 		throw std::runtime_error("the application's Vulkan device lacks VK_KHR_external_memory_fd");
-#endif
 	VkCommandPoolCreateInfo api{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 	api.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 	api.queueFamilyIndex = app_family;
@@ -173,9 +129,7 @@ void compositor::init_pipelines()
 	if (std::getenv("OPENDESK_OVR_LOG"))
 		report("private compositor device on %p", (void *)physical);
 	vkGetPhysicalDeviceMemoryProperties(physical, &memory_properties);
-#ifndef _WIN32
 	get_memory_fd_properties = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryFdPropertiesKHR"));
-#endif
 
 	VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 	pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -291,7 +245,7 @@ void compositor::create_private_device()
 
 	VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO};
 	ai.pApplicationName = "libovr-opendesk compositor";
-	ai.apiVersion = VK_API_VERSION_1_2; // timeline semaphores (Windows D3D11 mode)
+	ai.apiVersion = VK_API_VERSION_1_2;
 	VkInstanceCreateInfo ii{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 	ii.pApplicationInfo = &ai;
 	check(vkCreateInstance(&ii, nullptr, &instance), "vkCreateInstance(compositor)");
@@ -304,16 +258,6 @@ void compositor::create_private_device()
 		VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
 		VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
 		vkGetPhysicalDeviceProperties2(d, &props);
-#ifdef _WIN32
-		if (!app_physical) // D3D11 mode: the adapter's LUID
-		{
-			uint64_t l = 0;
-			std::memcpy(&l, id.deviceLUID, 8);
-			if (id.deviceLUIDValid && l == luid)
-				physical = d;
-			continue;
-		}
-#endif
 		if (!std::memcmp(id.deviceUUID, app_id.deviceUUID, VK_UUID_SIZE) && !std::memcmp(id.driverUUID, app_id.driverUUID, VK_UUID_SIZE))
 			physical = d;
 	}
@@ -334,14 +278,9 @@ void compositor::create_private_device()
 	qci.queueFamilyIndex = family;
 	qci.queueCount = 1;
 	qci.pQueuePriorities = &priority;
-#ifdef _WIN32
-	std::vector<const char *> extensions{"VK_KHR_external_memory_win32"};
-	const char * semaphore_extension = "VK_KHR_external_semaphore_win32";
-#else
 	std::vector<const char *> extensions{"VK_KHR_external_memory_fd", "VK_EXT_external_memory_dma_buf", "VK_KHR_image_format_list",
 	                                     "VK_EXT_image_drm_format_modifier"};
 	const char * semaphore_extension = "VK_KHR_external_semaphore_fd";
-#endif
 	{
 		uint32_t n = 0;
 		vkEnumerateDeviceExtensionProperties(physical, nullptr, &n, nullptr);
@@ -408,17 +347,10 @@ void compositor::create_yuv_pipeline()
 void compositor::create_gpu_sync()
 {
 	const bool app = app_vulkan(); // D3D11 mode: only our own per-slot objects (the shared fence orders the rest)
-#ifdef _WIN32
-	using export_fn = PFN_vkGetSemaphoreWin32HandleKHR;
-	using import_fn = PFN_vkImportSemaphoreWin32HandleKHR;
-	const char * export_name = "vkGetSemaphoreWin32HandleKHR";
-	const char * import_name = "vkImportSemaphoreWin32HandleKHR";
-#else
 	using export_fn = PFN_vkGetSemaphoreFdKHR;
 	using import_fn = PFN_vkImportSemaphoreFdKHR;
 	const char * export_name = "vkGetSemaphoreFdKHR";
 	const char * import_name = "vkImportSemaphoreFdKHR";
-#endif
 	auto app_get_fd = app ? reinterpret_cast<export_fn>(vkGetDeviceProcAddr(app_device, export_name)) : nullptr;
 	auto app_import = app ? reinterpret_cast<import_fn>(vkGetDeviceProcAddr(app_device, import_name)) : nullptr;
 	auto get_fd = reinterpret_cast<export_fn>(vkGetDeviceProcAddr(device, export_name));
@@ -432,26 +364,14 @@ void compositor::create_gpu_sync()
 		VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &esci};
 		check(vkCreateSemaphore(from, &sci, nullptr, &a), "vkCreateSemaphore(exported)");
 		moved_handle h;
-#ifdef _WIN32
-		VkSemaphoreGetWin32HandleInfoKHR gfi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR};
-		gfi.semaphore = a;
-		gfi.handleType = opaque_semaphore;
-		check(export_fd(from, &gfi, &h.h), "vkGetSemaphoreWin32HandleKHR");
-#else
 		VkSemaphoreGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
 		gfi.semaphore = a;
 		gfi.handleType = opaque_semaphore;
 		check(export_fd(from, &gfi, &h.h), "vkGetSemaphoreFdKHR");
-#endif
 		VkSemaphoreCreateInfo plain{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 		check(vkCreateSemaphore(to, &plain, nullptr, &b), "vkCreateSemaphore(imported)");
-#ifdef _WIN32
-		VkImportSemaphoreWin32HandleInfoKHR ifi{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-		ifi.handle = h.h;
-#else
 		VkImportSemaphoreFdInfoKHR ifi{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR};
 		ifi.fd = h.h;
-#endif
 		ifi.semaphore = b;
 		ifi.handleType = opaque_semaphore;
 		check(import_fd(to, &ifi), "import semaphore");
@@ -521,14 +441,6 @@ compositor::~compositor()
 {
 	if (app_queue)
 		vkQueueWaitIdle(app_queue);
-#ifdef _WIN32
-	if (dxvk)
-	{
-		queue_idle();
-		vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-	}
-	else
-#endif
 		vkDeviceWaitIdle(device);
 	destroy_gpu_sync();
 	release_outputs();
@@ -547,20 +459,6 @@ compositor::~compositor()
 	vkDestroySampler(device, sampler, nullptr);
 	vkDestroyFence(device, fence, nullptr);
 	vkDestroyCommandPool(device, pool, nullptr);
-#ifdef _WIN32
-	vkDestroySemaphore(device, timeline, nullptr);
-	if (d3d_fence)
-		reinterpret_cast<IUnknown *>(d3d_fence)->Release();
-	if (d3d_context)
-		reinterpret_cast<IUnknown *>(d3d_context)->Release();
-	if (d3d_device)
-		reinterpret_cast<IUnknown *>(d3d_device)->Release();
-#endif
-#ifdef _WIN32
-	if (dxvk) // DXVK's device and instance: not ours
-		dxvk->Release();
-	else
-#endif
 	{
 		vkDestroyDevice(device, nullptr);
 		vkDestroyInstance(instance, nullptr);
@@ -585,33 +483,11 @@ uint32_t compositor::memory_type(const VkPhysicalDeviceMemoryProperties & props,
 
 VkResult compositor::queue_submit(const VkSubmitInfo & si, VkFence f)
 {
-#ifdef _WIN32
-	if (dxvk)
-	{
-		dxvk->FlushRenderingCommands(); // the game's D3D11 work first, then ours on the same queue
-		dxvk->LockSubmissionQueue();
-		VkResult r = vkQueueSubmit(queue, 1, &si, f);
-		dxvk->ReleaseSubmissionQueue();
-		return r;
-	}
-#endif
 	return vkQueueSubmit(queue, 1, &si, f);
 }
 
 void compositor::queue_idle()
 {
-#ifdef _WIN32
-	if (dxvk) // DXVK keeps submitting: wait for our own work only
-	{
-		std::vector<VkFence> pending;
-		for (auto & f: frames)
-			if (f.pending)
-				pending.push_back(f.fence);
-		if (!pending.empty())
-			vkWaitForFences(device, uint32_t(pending.size()), pending.data(), VK_TRUE, UINT64_MAX);
-		return;
-	}
-#endif
 	vkQueueWaitIdle(queue);
 }
 
@@ -699,11 +575,7 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 		if (!depth)
 		{
 			moved_handle fd;
-#ifdef _WIN32
-			VkMemoryGetWin32HandleInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR};
-#else
 			VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
-#endif
 			gfi.memory = mem;
 			gfi.handleType = opaque_memory;
 			check(get_memory_fd(app_device, &gfi, &fd.h), "export swapchain memory");
@@ -774,7 +646,6 @@ std::unique_ptr<swapchain> compositor::create_swapchain(VkFormat format, uint32_
 	return sc;
 }
 
-#ifndef _WIN32
 int compositor::export_memory(const swapchain & sc, size_t index)
 {
 	VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
@@ -784,25 +655,15 @@ int compositor::export_memory(const swapchain & sc, size_t index)
 	check(get_memory_fd(app_device, &gfi, &fd), "export swapchain memory for OpenGL");
 	return fd;
 }
-#endif
 
 void compositor::destroy_swapchain(swapchain & sc)
 {
 	if (app_queue)
 		vkQueueWaitIdle(app_queue);
 	queue_idle();
-#ifdef _WIN32
-	for (ID3D11Texture2D * t: sc.textures)
-		if (t)
-			t->Release();
-	sc.textures.clear();
-#endif
 	for (auto & vs: sc.views)
 		for (VkImageView v: vs)
 			vkDestroyImageView(device, v, nullptr);
-#ifdef _WIN32
-	if (!sc.dxvk)
-#endif
 		for (VkImage i: sc.shared)
 			vkDestroyImage(device, i, nullptr);
 	for (VkDeviceMemory m: sc.shared_memory)
@@ -843,10 +704,6 @@ void compositor::import_outputs(vr_client & client)
 	// how this GPU can write the XRGB8888 buffers in their layout (DRM modifier): as an R32_UINT storage image (the
 	// shader packs the pixels), else only by copying into them (R32_UINT, or B8G8R8A8 which is the same bytes)
 	auto features = [&](VkFormat format) -> VkFormatFeatureFlags {
-#ifdef _WIN32
-		(void)format;
-		return 0; // no DRM modifiers: Windows streams are always opaque buffers
-#else
 		VkDrmFormatModifierPropertiesListEXT list{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
 		VkFormatProperties2 fp{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &list};
 		vkGetPhysicalDeviceFormatProperties2(physical, format, &fp);
@@ -857,7 +714,6 @@ void compositor::import_outputs(vr_client & client)
 			if (m.drmFormatModifier == c.image.modifier)
 				return m.drmFormatModifierTilingFeatures;
 		return 0;
-#endif
 	};
 	const bool opaque = c.image.memory == ipc::memory_opaque_buffer;
 	if (opaque)
@@ -911,12 +767,7 @@ void compositor::import_outputs(vr_client & client)
 				VkMemoryRequirements breq;
 				vkGetBufferMemoryRequirements(device, o.buffer, &breq);
 				moved_handle fd;
-#ifdef _WIN32
-				fd.h = img.fd; // the client keeps its NT handle: importing doesn't take it
-				fd.owned = false;
-#else
 				fd.h = dup(img.fd); // Vulkan takes ownership on success
-#endif
 				memory_import_info imp{memory_import_type};
 				imp.handleType = opaque_memory;
 				set_handle(imp, fd.h);
@@ -940,9 +791,6 @@ void compositor::import_outputs(vr_client & client)
 			}
 			else
 			{
-#ifdef _WIN32
-				throw std::runtime_error("the streamer offered DMA-BUF images, which Windows has not");
-#else
 			VkSubresourceLayout plane{};
 			plane.offset = img.desc.offset;
 			plane.rowPitch = img.desc.stride;
@@ -989,7 +837,6 @@ void compositor::import_outputs(vr_client & client)
 				check(r, "vkAllocateMemory(import stream image)");
 			}
 			vkBindImageMemory(device, o.image, o.memory, 0);
-#endif
 			}
 			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 			vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -1118,34 +965,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 				seen |= b.image == sc->shared[size_t(sc->committed)] && b.subresourceRange.baseArrayLayer == l.array_index[e];
 			if (seen)
 				continue;
-#ifdef _WIN32
-			if (from_d3d && sc->dxvk)
-			{
-				// DXVK's image on DXVK's queue: from the layout DXVK has it in, and back (same queue: no ownership change)
-				VkImage image = VK_NULL_HANDLE;
-				VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL;
-				if (auto * surface = query<IDXGIVkInteropSurface>(sc->textures[size_t(sc->committed)]))
-				{
-					surface->GetVulkanImageInfo(&image, &layout, nullptr);
-					surface->Release();
-				}
-				VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-				b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, l.array_index[e], 1};
-				b.image = sc->shared[size_t(sc->committed)];
-				b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				b.oldLayout = layout;
-				b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-				b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-				to_read.push_back(b);
-				b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				b.newLayout = layout;
-				b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-				b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-				to_attachment.push_back(b);
-				continue;
-			}
-#endif
 			if (from_d3d)
 			{
 				VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -1202,20 +1021,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 		                     uint32_t(list->size()), list->data());
 	};
 	uint64_t app_done = 0; // D3D11 mode: the fence value after the app's frame
-#ifdef _WIN32
-	if (from_d3d && dxvk)
-	{
-		// DXVK: the game's work and ours share a queue - queue_submit flushes the game's first
-	}
-	else if (from_d3d)
-	{
-		// the app's rendering so far, then this value: our submission waits for it on the GPU
-		app_done = ++fence_value;
-		d3d_context->Signal(d3d_fence, app_done);
-		d3d_context->Flush();
-	}
-	else
-#endif
 	if (fs) // the compositor's submission waits for ready (the app's frame) on the GPU
 		app_queue_submit(fs->app_release, app_release, VK_NULL_HANDLE, fs->ready_app, VK_NULL_HANDLE);
 	else
@@ -1459,51 +1264,6 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 	VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
 	si.commandBufferCount = 1;
 	si.pCommandBuffers = &cmd;
-#ifdef _WIN32
-	if (from_d3d && dxvk)
-	{
-		VkFence f = fs ? fs->fence : fence;
-		if (!fs)
-			vkResetFences(device, 1, &fence);
-		bool ok = queue_submit(si, f) == VK_SUCCESS;
-		if (fs)
-			fs->pending = ok;
-		else if (ok)
-			vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-		return ok;
-	}
-	if (from_d3d)
-	{
-		// app frame (app_done) -> composite -> composited; D3D11 waits for composited before the app renders again
-		const uint64_t composited = ++fence_value;
-		VkTimelineSemaphoreSubmitInfo tsi{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
-		tsi.waitSemaphoreValueCount = 1;
-		tsi.pWaitSemaphoreValues = &app_done;
-		tsi.signalSemaphoreValueCount = 1;
-		tsi.pSignalSemaphoreValues = &composited;
-		VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-		si.pNext = &tsi;
-		si.waitSemaphoreCount = 1;
-		si.pWaitSemaphores = &timeline;
-		si.pWaitDstStageMask = &stage;
-		si.signalSemaphoreCount = 1;
-		si.pSignalSemaphores = &timeline;
-		VkFence f = fs ? fs->fence : fence;
-		if (!fs)
-			vkResetFences(device, 1, &fence);
-		bool ok = queue_submit(si, f) == VK_SUCCESS;
-		if (fs)
-			fs->pending = ok;
-		else if (ok)
-			vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-		// even if ours failed, D3D11 must not wait for a value nobody signals
-		if (ok)
-			d3d_context->Wait(d3d_fence, composited);
-		else
-			fence_value = composited, d3d_context->Signal(d3d_fence, composited);
-		return ok;
-	}
-#endif
 	if (fs)
 	{
 		// no CPU waits: after the app's frame (ready) -> composite -> done; the app's queue waits for done before it
@@ -1529,228 +1289,4 @@ bool compositor::composite(vr_client & client, uint32_t slot, const std::vector<
 	return ok;
 }
 
-#ifdef _WIN32
-// ---------------------------------------------------------------------------------------------------------------
-// Direct3D 11 mode (OpenDesk XR's D3D11 core): the app renders into shared D3D11 textures; we composite them on our
-// Vulkan device of the same adapter. One shared fence orders both sides on the GPU.
-
-compositor::compositor(ID3D11Device * dev)
-{
-	d3d_device = query<ID3D11Device5>(dev);
-	if (!d3d_device)
-		throw std::runtime_error("Direct3D 11.4 (ID3D11Device5) is required");
-	ID3D11DeviceContext * ctx = nullptr;
-	dev->GetImmediateContext(&ctx);
-	d3d_context = query<ID3D11DeviceContext4>(ctx);
-	if (ctx)
-		ctx->Release();
-	if (!d3d_context)
-		throw std::runtime_error("Direct3D 11.4 (ID3D11DeviceContext4) is required");
-	// ovr_EndFrame may come from another thread than the app's rendering
-	if (auto * mt = query<ID3D10Multithread>(dev))
-	{
-		mt->SetMultithreadProtected(TRUE);
-		mt->Release();
-	}
-	if (auto * dxgi = query<IDXGIDevice>(dev))
-	{
-		IDXGIAdapter * adapter = nullptr;
-		DXGI_ADAPTER_DESC desc{};
-		if (SUCCEEDED(dxgi->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&desc)))
-			luid = (uint64_t(uint32_t(desc.AdapterLuid.HighPart)) << 32) | desc.AdapterLuid.LowPart;
-		if (adapter)
-			adapter->Release();
-		dxgi->Release();
-	}
-	// DXVK: its textures are images on its own Vulkan device - composite there, on its queue
-	dev->QueryInterface(__uuidof(IDXGIVkInteropDevice1), reinterpret_cast<void **>(&dxvk));
-	if (dxvk)
-	{
-		uint32_t queue_index = 0;
-		dxvk->GetVulkanHandles(&instance, &physical, &device);
-		dxvk->GetSubmissionQueue1(&queue, &queue_index, &family);
-		report("DXVK device: compositing on its Vulkan device (queue family %u)", family);
-		init_pipelines();
-		return;
-	}
-	create_private_device();
-	init_pipelines();
-	create_d3d11_sync();
-}
-
-void compositor::create_d3d11_sync()
-{
-	if (!private_semaphore_fd)
-		throw std::runtime_error("the GPU's Vulkan driver lacks VK_KHR_external_semaphore_win32");
-	if (FAILED(d3d_device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, __uuidof(ID3D11Fence), reinterpret_cast<void **>(&d3d_fence))))
-		throw std::runtime_error("cannot create a shared Direct3D 11 fence");
-	HANDLE h = nullptr;
-	if (FAILED(d3d_fence->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &h)))
-		throw std::runtime_error("cannot share the Direct3D 11 fence");
-	VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-	type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-	VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &type};
-	check(vkCreateSemaphore(device, &sci, nullptr, &timeline), "vkCreateSemaphore(timeline)");
-	auto import = reinterpret_cast<PFN_vkImportSemaphoreWin32HandleKHR>(vkGetDeviceProcAddr(device, "vkImportSemaphoreWin32HandleKHR"));
-	VkImportSemaphoreWin32HandleInfoKHR ifi{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-	ifi.semaphore = timeline;
-	ifi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT; // also ID3D11Fence (D3D11_FENCE_BIT is an alias)
-	ifi.handle = h;
-	VkResult r = import ? import(device, &ifi) : VK_ERROR_EXTENSION_NOT_PRESENT;
-	CloseHandle(h);
-	check(r, "import the Direct3D 11 fence");
-}
-
-std::unique_ptr<swapchain> compositor::create_swapchain_d3d11(uint32_t dxgi_format, VkFormat format, uint32_t width, uint32_t height,
-                                                              uint32_t array_size, uint32_t mip_levels, uint32_t sample_count,
-                                                              uint32_t image_count, bool depth, bool cube, bool render_target, bool uav, bool shader_resource)
-{
-	auto sc = std::make_unique<swapchain>();
-	sc->format = format;
-	sc->width = width;
-	sc->height = height;
-	sc->layers = std::max(array_size, 1u); // cube maps: 6 (x array) like the Vulkan path
-	sc->samples = std::max(sample_count, 1u);
-	sc->depth = depth;
-	sc->dxgi_format = dxgi_format;
-	sc->mip_levels = std::max(mip_levels, 1u);
-	auto get_props = reinterpret_cast<PFN_vkGetMemoryWin32HandlePropertiesKHR>(vkGetDeviceProcAddr(device, "vkGetMemoryWin32HandlePropertiesKHR"));
-	for (uint32_t i = 0; i < image_count; ++i)
-	{
-		D3D11_TEXTURE2D_DESC td{};
-		td.Width = width;
-		td.Height = height;
-		td.MipLevels = sc->mip_levels;
-		td.ArraySize = sc->layers;
-		td.Format = DXGI_FORMAT(dxgi_format);
-		td.SampleDesc.Count = sc->samples;
-		td.Usage = D3D11_USAGE_DEFAULT;
-		// color: always sampled (by us); depth: only when typeless (a typed depth format takes no shader resource view)
-		td.BindFlags = (shader_resource || !depth ? D3D11_BIND_SHADER_RESOURCE : 0) |
-		               (depth ? D3D11_BIND_DEPTH_STENCIL : render_target ? D3D11_BIND_RENDER_TARGET : 0) |
-		               (uav && !depth ? D3D11_BIND_UNORDERED_ACCESS : 0);
-		td.MiscFlags = (depth ? 0 : D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE) | (cube ? D3D11_RESOURCE_MISC_TEXTURECUBE : 0);
-		ID3D11Texture2D * tex = nullptr;
-		if (FAILED(d3d_device->CreateTexture2D(&td, nullptr, &tex)))
-			throw std::runtime_error("CreateTexture2D(swapchain) failed");
-		sc->textures.push_back(tex);
-		std::vector<VkImageView> views;
-		if (!depth && dxvk)
-		{
-			// DXVK: the texture's own Vulkan image, viewed in our format when the image allows other views
-			VkImage image = VK_NULL_HANDLE;
-			VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
-			VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-			auto * surface = query<IDXGIVkInteropSurface>(tex);
-			const HRESULT hr = surface ? surface->GetVulkanImageInfo(&image, &layout, &info) : E_NOINTERFACE;
-			if (surface)
-				surface->Release();
-			if (FAILED(hr) || !image)
-				throw std::runtime_error("DXVK did not expose the swapchain texture's Vulkan image");
-			sc->shared.push_back(image);
-			sc->dxvk = true;
-			const VkFormat view_format = (info.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) ? format : info.format;
-			for (uint32_t l = 0; l < sc->layers; ++l)
-			{
-				VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-				vci.image = image;
-				vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-				vci.format = view_format;
-				vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, l, 1};
-				VkImageView v;
-				check(vkCreateImageView(device, &vci, nullptr, &v), "vkCreateImageView(DXVK swapchain)");
-				views.push_back(v);
-			}
-		}
-		else if (!depth)
-		{
-			HANDLE h = nullptr;
-			auto * resource = query<IDXGIResource1>(tex);
-			const bool shared_ok = resource && SUCCEEDED(resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-			                                                                          nullptr, &h));
-			if (resource)
-				resource->Release();
-			if (!shared_ok)
-				throw std::runtime_error("cannot share a swapchain texture");
-			moved_handle owned{h};
-			VkExternalMemoryImageCreateInfo ext{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
-			ext.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &ext};
-			ici.imageType = VK_IMAGE_TYPE_2D;
-			ici.format = format;
-			ici.extent = {width, height, 1};
-			ici.mipLevels = sc->mip_levels;
-			ici.arrayLayers = sc->layers;
-			ici.samples = VkSampleCountFlagBits(sc->samples);
-			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-			ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-			ici.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT | (cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0);
-			ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			VkImage shared;
-			check(vkCreateImage(device, &ici, nullptr, &shared), "vkCreateImage(shared D3D11 texture)");
-			VkMemoryRequirements req;
-			vkGetImageMemoryRequirements(device, shared, &req);
-			VkMemoryWin32HandlePropertiesKHR hp{VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
-			if (get_props)
-				get_props(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT, h, &hp);
-			VkImportMemoryWin32HandleInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR};
-			imp.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
-			imp.handle = h;
-			VkMemoryDedicatedAllocateInfo ded{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, &imp};
-			ded.image = shared;
-			VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &ded};
-			mai.allocationSize = req.size;
-			mai.memoryTypeIndex = memory_type(memory_properties, req.memoryTypeBits & (hp.memoryTypeBits ? hp.memoryTypeBits : ~0u),
-			                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-			VkDeviceMemory mem;
-			if (VkResult r = vkAllocateMemory(device, &mai, nullptr, &mem); r != VK_SUCCESS)
-			{
-				vkDestroyImage(device, shared, nullptr);
-				check(r, "vkAllocateMemory(import D3D11 texture)");
-			}
-			vkBindImageMemory(device, shared, mem, 0);
-			sc->shared.push_back(shared);
-			sc->shared_memory.push_back(mem);
-			for (uint32_t l = 0; l < sc->layers; ++l)
-			{
-				VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-				vci.image = shared;
-				vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-				vci.format = format;
-				vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, l, 1};
-				VkImageView v;
-				check(vkCreateImageView(device, &vci, nullptr, &v), "vkCreateImageView(D3D11 swapchain)");
-				views.push_back(v);
-			}
-		}
-		sc->views.push_back(views);
-	}
-	// GENERAL once, before D3D11 writes anything: every frame then acquires them from D3D11 (EXTERNAL) without
-	// discarding their contents
-	if (!sc->shared.empty() && !sc->dxvk)
-	{
-		struct ctx_t
-		{
-			swapchain * sc;
-		} ctx{sc.get()};
-		one_time_submit(
-		        [](VkCommandBuffer c, void * p) {
-			        auto * s = static_cast<ctx_t *>(p)->sc;
-			        for (VkImage img: s->shared)
-			        {
-				        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-				        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-				        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-				        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				        b.image = img;
-				        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS};
-				        vkCmdPipelineBarrier(c, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
-				                             nullptr, 1, &b);
-			        }
-		        },
-		        &ctx);
-	}
-	return sc;
-}
-#endif
 } // namespace od::ovr
