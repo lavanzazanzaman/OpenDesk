@@ -161,6 +161,10 @@ Issues and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
 | `third_party/` | Vendored third-party code |
 | `docs/` | Build and compatibility notes |
 
+## Made with Claude
+
+This project was made with [Claude](https://claude.com/claude-code), Anthropic's AI coding assistant.
+
 ## License
 
 OpenDesk is released under the MIT License. See [`LICENSE`](LICENSE) and
