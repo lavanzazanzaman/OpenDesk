@@ -68,7 +68,7 @@ cat > $W/config/OpenDesk/streamer.json <<J
 {"Accounts": {"1": ["testacct"]}, "CheckSetupAtStartup": false, "AudioStreaming": ${AUDIO_TEST_MODE:-0}, "StartMinimized": true,
  "VideosRootPath": "$W/videos"${OPENDESK_TEST_HAND_POSE:+, \"HandPose\": $OPENDESK_TEST_HAND_POSE}${OPENDESK_TEST_CODEC:+, \"PreferredCodec\": $OPENDESK_TEST_CODEC}${OPENDESK_TEST_PERIPHERY:+, \"PeripheryScale\": $OPENDESK_TEST_PERIPHERY}${OPENDESK_TEST_RESOLUTION:+, \"RenderResolutionOverride\": $OPENDESK_TEST_RESOLUTION}${OPENDESK_TEST_FOVEA:+, \"FoveaSize\": $OPENDESK_TEST_FOVEA}${OPENDESK_TEST_ENCRYPT:+, \"EncryptLocalTraffic\": true}${OPENDESK_TEST_NO_STENCIL:+, \"UseFovStencil\": false}${OPENDESK_TEST_BOOST:+, \"BoostGamePriority\": true}${OPENDESK_TEST_SOFT_FOVEA:+, \"SoftFoveaEdge\": true}${OPENDESK_TEST_FIXED_PRESET:+, \"AdaptiveEncoderSpeed\": false}${OPENDESK_TEST_NO_AQ:+, \"EnableAQ\": false}${OPENDESK_TEST_TWO_PASS:+, \"Enable2Pass\": true}${OPENDESK_TEST_AMD_SPEED:+, \"AmdEncoderSpeed\": $OPENDESK_TEST_AMD_SPEED}${OPENDESK_TEST_QPA:+, \"StartMinimized\": false, \"StartMinimizedInTray\": false}${OPENDESK_TEST_GAME_GPU:+, \"DualGpu\": true, \"GameGpu\": \"$OPENDESK_TEST_GAME_GPU\", \"StreamingGpu\": \"$OPENDESK_TEST_STREAMING_GPU\"}}
 J
-rm -f $W/config/OpenDesk/engine.json
+[ -n "${KEEP_ENGINE_STATE:-}" ] || rm -f $W/config/OpenDesk/engine.json # KEEP_ENGINE_STATE=1: a second connection with what the first learnt
 # the streamer's screenshots (ScreenshotToDesktop) go to $XDG_CONFIG_HOME/user-dirs.dirs' pictures folder, not ~/Pictures
 mkdir -p $W/pictures
 printf 'XDG_PICTURES_DIR="%s"\n' "$W/pictures" > $W/config/user-dirs.dirs

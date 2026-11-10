@@ -139,7 +139,13 @@ Settings are in `~/.config/OpenDesk/`, and the log is at `~/.cache/OpenDesk/stre
 
 The headset app refuses a streamer whose minor version is newer than its own, and asks older streamers to update.
 Headset apps from 1.34.25 onward send their version when they search for computers, and by default OpenDesk reports
-that version back. Older apps get 1.20.3, the lowest version the app accepts. To force a version:
+that version back.
+
+**Older headset apps can't be matched automatically:** before 1.34.25 the app doesn't send its version anywhere, not even
+after connecting. OpenDesk reports 1.34.23 to them, which every 1.34 app accepts and which keeps eye-tracked foveated
+streaming. A 1.34.24 app asks for an update once; OpenDesk then knows its version and reports 1.34.24 from the next
+connection. Headset apps older than 1.34 refuse 1.34.23: turn off **Match the headset app's version** and enter 1.20.3,
+the lowest version every app accepts. Updating the headset app to 1.34.25 or newer is simplest. To force a version:
 
 ```sh
 OPENDESK_STREAMER_VERSION=1.34.23 opendesk-streamer

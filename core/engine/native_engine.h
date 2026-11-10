@@ -16,6 +16,7 @@
 #include <set>
 
 #include <QHostAddress>
+#include <QHash>
 #include <QJsonObject>
 #include <QObject>
 #include <QPointer>
@@ -147,6 +148,10 @@ private:
 	engine_options options;
 	std::atomic<bool> audio_enabled{true};
 	QString portal_restore_token;
+	// headset apps before 1.34.25 don't send their version: per account, the one learnt from an update request
+	QJsonObject learned_versions;
+	struct old_app_reply { QString account; std::array<int, 4> version; };
+	QHash<QString, old_app_reply> old_app_replies; // by headset address: what an app without a version was told
 	qint64 last_capture_restart_ms = 0;
 	int quick_capture_restarts = 0;
 	void save_portal_token(const QString &);

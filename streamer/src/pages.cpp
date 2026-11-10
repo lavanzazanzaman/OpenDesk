@@ -750,15 +750,17 @@ QWidget * makeStreamingPage(Engine & engine)
 
 	auto * compat = card(p, "Headset compatibility");
 	auto * reported = new QLineEdit(s.reportedStreamerVersion);
-	toggleRow(compat, "Match the headset app's version", "Reports the version the headset app expects (recommended)",
+	toggleRow(compat, "Match the headset app's version", "Reports the version the headset app expects; exact from headset app 1.34.25",
 	          s.reportedVersionAuto,
 	          [&engine, reported] {
 		          reported->setEnabled(!StreamerSettings::instance().reportedVersionAuto);
 		          engine.applyOptions();
 	          },
 	          "Headset apps from 1.34.25 tell the streamer their version: it is reported back, so the headset neither\n"
-	          "refuses the PC nor asks to update it, and gets every feature it supports. Older headset apps get the\n"
-	          "version below. Off: always report the version below");
+	          "refuses the PC nor asks to update it, and gets every feature it supports. Older apps don't send their version,\n"
+	          "so they can't be matched: they get 1.34.23, which every 1.34 app accepts (a 1.34.24 app is recognised after it\n"
+	          "asks for an update once). Apps older than 1.34: turn this off and use 1.20.3.\n"
+	          "Off: always report the version below");
 	reported->setEnabled(!s.reportedVersionAuto);
 	reported->setFixedWidth(120);
 	reported->setPlaceholderText("1.20.3");

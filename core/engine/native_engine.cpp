@@ -143,6 +143,7 @@ struct native_engine::session
 	bool gaze_seen = false;
 	bool spacewarp_logged = false;
 	bool newer_headset_reported = false; // UpdateRequired seen
+	std::optional<native_engine::old_app_reply> old_app; // the app sent no version: what it was told
 	QString host;            // the headset's address (messaging): stream connections from elsewhere are not its
 	qint64 started_ms = 0;
 	pulse_client * pulse = nullptr;
@@ -328,6 +329,7 @@ void native_engine::start(QStringList accounts_, QJsonObject options_)
 		{
 			QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
 			portal_restore_token = o.value("portal_restore_token").toString();
+			learned_versions = o.value("learned_versions").toObject();
 			monitor_count = o.value("monitor_count").toInt(0);
 		}
 	}
@@ -583,9 +585,19 @@ void native_engine::on_discovery(QUdpSocket * socket)
 			continue;
 		}
 		computer.adapters = local_adapters(); // USB link-local appears once the headset brings the link up
-		// Automatic: the headset app's own version when it sends one (never refused, no update prompt); else the
-		// configured / compatibility version every app accepts
-		computer.version = options.auto_version && req->app_version ? *req->app_version : options.reported_version;
+		// Automatic: the headset app's own version when it sends one (from 1.34.25: never refused, no update prompt).
+		// Older apps don't say: they get the newest 1.34 we know, which every 1.34 app accepts (only a higher minor
+		// version is refused) and which unlocks eye tracking and stream restart - 1.20.3 lost those on a Quest Pro.
+		// (and 1.34.24, the only older app newer than that, is learnt the first time it asks for an update)
+		computer.version = !options.auto_version ? options.reported_version
+		                   : req->app_version    ? *req->app_version
+		                   : learned_versions.contains(account)
+		                           ? parse_streamer_version(learned_versions.value(account).toString().toStdString())
+		                           : latest_known_streamer_version;
+		if (options.auto_version && !req->app_version)
+			old_app_replies.insert(host, {account, computer.version});
+		else
+			old_app_replies.remove(host);
 		auto reply = build_discovery_reply(*req, computer);
 		if (!reply)
 			continue;
@@ -631,6 +643,8 @@ void native_engine::on_messaging_connection()
 		current = std::make_unique<session>();
 		current->messaging = s;
 		current->host = host;
+		if (old_app_replies.contains(host))
+			current->old_app = old_app_replies.value(host);
 		current->started_ms = QDateTime::currentMSecsSinceEpoch();
 		current->encrypted = computer.encrypt_local;
 		current->pulse = pulse_audio();
@@ -713,6 +727,14 @@ void native_engine::on_messaging_connection()
 					if (!std::exchange(sess->newer_headset_reported, true))
 						info(QString("[update] headset asked for a streamer update; staying connected (reported version %1)")
 						             .arg(QString::fromStdString(version_string(computer.version))));
+					// An app that sent no version is 1.34.24 at most: told 1.34.23, an update request means it is 1.34.24
+					if (sess->old_app && sess->old_app->version < std::array<int, 4>{1, 34, 24, 0} &&
+					    sess->old_app->version >= std::array<int, 4>{1, 34, 0, 0} && !learned_versions.contains(sess->old_app->account))
+					{
+						learned_versions[sess->old_app->account] = "1.34.24";
+						save_engine_value("learned_versions", learned_versions);
+						info("[update] the headset app is 1.34.24: reporting that from the next connection");
+					}
 				}
 				if (qname == "DisposeGamepadEmulation" && sess->gamepad)
 				{

@@ -2,6 +2,11 @@
 
 The streamer's What's New tab and the GitHub release notes are both made from this file. Newest version first.
 
+## 1.1.3
+
+- Headset apps older than 1.34.25 can't be matched automatically, because they don't send their version. They now get 1.34.23 instead of 1.20.3, so they keep eye-tracked foveated streaming and stop asking for an update
+- A 1.34.24 headset app is recognised after it asks for an update once, and gets its exact version from the next connection
+
 ## 1.1.2
 
 - Recentering tells games where the new centre is, for games like Beat Saber that were placing you in the wrong spot
